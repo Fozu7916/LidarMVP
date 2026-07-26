@@ -3,5 +3,6 @@
 2) генерируем .xyz файл ( обрабатывая фантомные ошибки класстеризацией)
 3) генерируем .obj файл из .xyz
 4) Отрисовываем данный .obj в вебе
-<img width="811" height="302" alt="image" src="https://github.com/user-attachments/assets/1421fb4b-317a-44ee-a72a-0452795509b8" />
+<img width="744" height="347" alt="image" src="https://github.com/user-attachments/assets/32217b33-4c23-4915-a397-e7f27a720f0e" />
+
 
