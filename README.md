@@ -6,3 +6,7 @@
 <img width="744" height="347" alt="image" src="https://github.com/user-attachments/assets/32217b33-4c23-4915-a397-e7f27a720f0e" />
 
 
+Для понимания работы кода
+- Библиотека lidar.cs, которую можно интегрировать куда угодно(ui,web etc)
+- CLI (по сути ui но в консоли для управления + логов) - Program.cs
+- Файл который по сырому .xyz файлу превращает точки в 3д view (viewer.html - реднер, передача данных из Program.cs)
