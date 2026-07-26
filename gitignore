@@ -1,0 +1,24 @@
+# Сборка .NET
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Результаты работы Лидар-БИМ (сгенерированные мастер-карты и кэш)
+*.xyz
+*.ply
+*.csv
+
+
+# Системные файлы и ОС
+.vs/
+.vscode/
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+.DS_Store

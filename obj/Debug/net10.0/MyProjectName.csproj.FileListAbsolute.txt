@@ -1,0 +1,16 @@
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\viewer.html
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\MyProjectName.exe
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\MyProjectName.deps.json
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\MyProjectName.runtimeconfig.json
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\MyProjectName.dll
+c:\Users\Fozu\Documents\github\others\LidarMVP\bin\Debug\net10.0\MyProjectName.pdb
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.GeneratedMSBuildEditorConfig.editorconfig
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.AssemblyInfoInputs.cache
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.AssemblyInfo.cs
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.csproj.CoreCompileInputs.cache
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.sourcelink.json
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.dll
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\refint\MyProjectName.dll
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.pdb
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\MyProjectName.genruntimeconfig.cache
+c:\Users\Fozu\Documents\github\others\LidarMVP\obj\Debug\net10.0\ref\MyProjectName.dll
