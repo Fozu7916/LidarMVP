@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>LiDAR-BIM Web Viewer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: sans-serif; color: #fff; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 16px; color: #4CAF50; }
+        p { margin: 0; font-size: 12px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>LiDAR-BIM 3D Viewer</h1>
+        <p>Управление: ЛКМ — вращение | ПКМ — панорама | Скролл — зум</p>
+    </div>
+
+    <!-- Подключаем Three.js и модули управления через CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+        // 1. Инициализация сцены, камеры и рендерера
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(20, 20, 20);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Освещение
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(10, 20, 15);
+        scene.add(dirLight);
+
+        // Сетка координат
+        const gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x222222);
+        scene.add(gridHelper);
+
+        // 2. Загрузка данных (пытаемся загрузить OBJ, если нет — XYZ)
+        const objLoader = new OBJLoader();
+        
+        objLoader.load('/building_model.obj', 
+            (object) => {
+                // Настраиваем материал для меша
+                object.traverse((child) => {
+                    if (child.isMesh) {
+                        child.material = new THREE.MeshStandardMaterial({ 
+                            vertexColors: true, 
+                            roughness: 0.4,
+                            side: THREE.DoubleSide
+                        });
+                    }
+                });
+                scene.add(object);
+                console.log("Меш .obj успешно загружен в веб!");
+            },
+            (xhr) => { console.log((xhr.loaded / xhr.total * 100) + '% загружено'); },
+            (error) => {
+                console.log("OBJ файл не найден, пробуем загрузить XYZ облако точек...");
+                loadXyzCloud();
+            }
+        );
+
+        // Запасной вариант: загрузка .xyz облака точек
+        function loadXyzCloud() {
+            fetch('/global_master_map.xyz')
+                .then(response => response.text())
+                .then(data => {
+                    const lines = data.split('\n');
+                    const geometry = new THREE.BufferGeometry();
+                    const positions = [];
+                    const colors = [];
+
+                    for (let line of lines) {
+                        const parts = line.trim().split(' ');
+                        if (parts.length >= 6) {
+                            positions.push(parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2]));
+                            colors.push(parseInt(parts[3])/255, parseInt(parts[4])/255, parseInt(parts[5])/255);
+                        }
+                    }
+
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                    const material = new THREE.PointsMaterial({ size: 0.1, vertexColors: true });
+                    const points = new THREE.Points(geometry, material);
+                    scene.add(points);
+                    console.log("Облако точек .xyz успешно загружено в веб!");
+                })
+                .catch(err => console.error("Не удалось загрузить ни OBJ, ни XYZ файлы:", err));
+        }
+
+        // Анимация рендеринга
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Адаптация под размер окна
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
