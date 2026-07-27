@@ -10,7 +10,24 @@
   <None Update="viewer.html">
     <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </None>
+  
 </ItemGroup>
 
+<!-- Автоматическая сборка релиза и архивация средствами MSBuild -->
+  <Target Name="PublishAndZip" AfterTargets="Publish">
+    <PropertyGroup>
+      <PublishDir>$(PublishDir)</PublishDir>
+      <ZipFileName>$(ProjectDir)bin\Release\$(TargetFramework)\win-x64\LidarBIM_Release.zip</ZipFileName>
+    </PropertyGroup>
 
+    <!-- Копируем viewer.html в папку публикации, чтобы он попал в архив -->
+    <Copy SourceFiles="$(ProjectDir)viewer.html" DestinationFolder="$(PublishDir)" Condition="Exists('$(ProjectDir)viewer.html')" />
+
+    <!-- Удаляем старый архив, если он уже существовал -->
+    <Delete Files="$(ZipFileName)" Condition="Exists('$(ZipFileName)')" />
+
+    <!-- Запаковываем всю папку publish в один .zip архив -->
+    <Message Text="Упаковка релизной папки в архив: $(ZipFileName)" Importance="high" />
+    <ZipDirectory SourceDirectory="$(PublishDir)" DestinationFile="$(ZipFileName)" Overwrite="true" />
+  </Target>
 </Project>
