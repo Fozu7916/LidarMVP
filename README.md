@@ -1,24 +1,24 @@
-ОБРАБОТКА 6 МЛН ТОЧЕК ЗА ~3 СЕКУНДЫ
-Это MVP Системы автоматизированного мониторинга строительства DroneLiDAR-BIM
-1) Получаем данные csv + ply(либо если их нет то автогенерируем заглушки тестовые)
-2) генерируем .xyz файл ( обрабатывая фантомные ошибки класстеризацией)
-3) Отрисовываем данный .xyz в вебе
+PROCESSING 6 MILLION POINTS IN ~3 SECONDS
+This is the MVP of the DroneLiDAR-BIM Automated Construction Monitoring System.
+1) We receive CSV + ply data (or, if it's not available, we automatically generate test stubs)
+2) We generate an .xyz file (processing phantom errors with classifiers)
+3) We render this .xyz file on the web
 <img width="744" height="347" alt="image" src="https://github.com/user-attachments/assets/32217b33-4c23-4915-a397-e7f27a720f0e" />
 
-Так же есть 2 автогенерации данных: 
+There are also two automatic data generation options:
 
--Домик в питон файле(есть затемнённая часть) 
+- A house in a Python file (there is a darkened section)
 
--Три коробки, генерируются автоматически при запуске CLI, чтобы не вызывать исключение в связи с отсуствием файлов .ply и .csv 
+- Three boxes are generated automatically when the CLI is launched to avoid causing exceptions due to Lack of .ply and .csv files
 
-Для понимания работы кода
-- Библиотека lidar.cs, которую можно интегрировать куда угодно(ui,web etc)
-- CLI (по сути ui но в консоли для управления + логов) - Program.cs
-- Файл который по сырому .xyz файлу превращает точки в 3д view (viewer.html - реднер, передача данных из Program.cs)
+To understand how the code works
+- The lidar.cs library, which can be integrated anywhere (UI, web, etc.)
+- CLI (essentially a UI, but in a console for control and logging) - Program.cs
+- A file that converts points into a 3D view from a raw .xyz file (viewer.html - renderer, transferring data from Program.cs)
 
-Как оно работает:
-Мы получаем с дрона его позицию(.csv) и показания лидара(.ply)
+How it works:
+We receive the drone's position (.csv) and lidar readings (.ply) from the drone.
 
-ВАЖНО: .csv и .ply для того, чтобы были между собой связаны программой, должны называться одинаково между собой(прим. N.csv + N.ply)
+IMPORTANT: To be linked by the program, the .csv and .ply files must have the same name (e.g., N.csv + N.ply).
 
-Все "квадраты" полученные в результате сканирования объединяются между собой в 1 .xyz файл.После его по желанию можно прям в программе отрисовать в браузере.
+All "squares" obtained from the scan are combined into a single .xyz file. This can then be rendered directly in the program in a browser, if desired.
