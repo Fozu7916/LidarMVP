@@ -4,7 +4,6 @@ using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -28,37 +27,26 @@ namespace LidarProcessorMVP
 
     public static class LidarPipeline
     {
-        // Глобальное геодезическое смещение (Local Origin) для сохранения точности в float
         public static double GlobalOriginX = 0.0;
         public static double GlobalOriginY = 0.0;
         public static double GlobalOriginZ = 0.0;
         public static bool HasGlobalOrigin = false;
 
-        /// <summary>
-        /// Универсальная загрузка: определяет LAS (DJI Terra) или PLY по расширению.
-        /// </summary>
         public static List<Point3D> LoadScanAuto(string filePath)
         {
             string ext = Path.GetExtension(filePath).ToLowerInvariant();
-            if (ext == ".las")
-            {
-                return FastLoadLasFile(filePath);
-            }
+            if (ext == ".las") return FastLoadLasFile(filePath);
             return FastLoadPlyFile(filePath);
         }
 
-        /// <summary>
-        /// Высокоскоростной бинарный парсер промышленного формата ASPRS LAS (DJI Zenmuse L2).
-        /// </summary>
         public static List<Point3D> FastLoadLasFile(string path)
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 2 * 1024 * 1024);
             using var br = new BinaryReader(fs);
 
-            // Чтение заголовка LAS (Header)
             byte[] signature = br.ReadBytes(4);
             if (signature[0] != 'L' || signature[1] != 'A' || signature[2] != 'S' || signature[3] != 'F')
-                throw new InvalidDataException("Файл не является корректным стандартом ASPRS LAS.");
+                throw new InvalidDataException("Файл не является стандартом ASPRS LAS.");
 
             fs.Seek(96, SeekOrigin.Begin);
             uint offsetToPoints = br.ReadUInt32();
@@ -68,7 +56,6 @@ namespace LidarProcessorMVP
             ushort pointRecordLength = br.ReadUInt16();
             uint legacyPointCount = br.ReadUInt32();
 
-            // Читаем Scale Factors и Offsets
             fs.Seek(131, SeekOrigin.Begin);
             double scaleX = br.ReadDouble();
             double scaleY = br.ReadDouble();
@@ -102,7 +89,6 @@ namespace LidarProcessorMVP
                 double realY = (rawY * scaleY) + offsetY;
                 double realZ = (rawZ * scaleZ) + offsetZ;
 
-                // Фиксация опорной геодезической точки по первому замеру
                 if (!HasGlobalOrigin)
                 {
                     GlobalOriginX = realX;
@@ -111,18 +97,18 @@ namespace LidarProcessorMVP
                     HasGlobalOrigin = true;
                 }
 
-                // Локальные метры относительно базиса (без потери точности)
                 float localX = (float)(realX - GlobalOriginX);
                 float localY = (float)(realY - GlobalOriginY);
                 float localZ = (float)(realZ - GlobalOriginZ);
 
-                // Чтение цвета (DJI L2 пишет 16-битный RGB в зависимости от формата точки)
                 byte r = 200, g = 200, b = 200;
                 int rgbOffset = -1;
 
+                // Поддержка LAS 1.4 форматов (Point Format 6-10)
                 if (pointFormat == 2) rgbOffset = 20;
                 else if (pointFormat == 3) rgbOffset = 28;
                 else if (pointFormat == 7 || pointFormat == 8) rgbOffset = 30;
+                else if (pointFormat == 9 || pointFormat == 10) rgbOffset = 30; // Экстра-байты начинаются дальше, но RGB на 30
 
                 if (rgbOffset > 0 && rgbOffset + 6 <= pointRecordLength)
                 {
@@ -134,55 +120,15 @@ namespace LidarProcessorMVP
                     b = (byte)(rawB >> 8);
                 }
 
-                points.Add(new Point3D(localX, localZ, localY, r, g, b)); // Преобразуем Z в высоту
+                points.Add(new Point3D(localX, localZ, localY, r, g, b)); 
             }
 
             return points;
         }
 
-        public static int GetFileVertexCount(string filePath)
-        {
-            string ext = Path.GetExtension(filePath).ToLowerInvariant();
-            if (ext == ".las")
-            {
-                try
-                {
-                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    using var br = new BinaryReader(fs);
-                    fs.Seek(107, SeekOrigin.Begin);
-                    uint count = br.ReadUInt32();
-                    return (int)count;
-                }
-                catch { return 0; }
-            }
-            return GetPlyVertexCount(filePath);
-        }
-
-        public static int GetPlyVertexCount(string plyPath)
-        {
-            try
-            {
-                using var reader = new StreamReader(plyPath);
-                string? line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    line = line.Trim();
-                    if (line.StartsWith("element vertex", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 3 && int.TryParse(parts[2], out int count))
-                            return count;
-                    }
-                    if (line.Equals("end_header", StringComparison.OrdinalIgnoreCase))
-                        break;
-                }
-            }
-            catch { }
-            return 0;
-        }
-
         public static List<Point3D> FastLoadPlyFile(string path)
         {
+            // Оставлено без изменений (логика парсинга PLY оптимальна)
             const int BufferSize = 1024 * 1024;
             var points = new List<Point3D>(128000);
 
@@ -272,26 +218,6 @@ namespace LidarProcessorMVP
             });
 
             return new List<Point3D>(voxelMap.Values);
-        }
-
-        public static void FastExportToXYZ(List<Point3D> points, string outputPath)
-        {
-            using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024);
-            using var writer = new StreamWriter(fs, System.Text.Encoding.ASCII, 1024 * 1024);
-            var culture = System.Globalization.CultureInfo.InvariantCulture;
-            Span<char> buffer = stackalloc char[128];
-
-            foreach (var pt in points)
-            {
-                int w = 0;
-                pt.X.TryFormat(buffer.Slice(w), out int cw, "F4", culture); w += cw; buffer[w++] = ' ';
-                pt.Y.TryFormat(buffer.Slice(w), out cw, "F4", culture); w += cw; buffer[w++] = ' ';
-                pt.Z.TryFormat(buffer.Slice(w), out cw, "F4", culture); w += cw; buffer[w++] = ' ';
-                pt.R.TryFormat(buffer.Slice(w), out cw, default, culture); w += cw; buffer[w++] = ' ';
-                pt.G.TryFormat(buffer.Slice(w), out cw, default, culture); w += cw; buffer[w++] = ' ';
-                pt.B.TryFormat(buffer.Slice(w), out cw, default, culture); w += cw;
-                writer.WriteLine(buffer.Slice(0, w));
-            }
         }
 
         public static void ExportToBinary(List<Point3D> points, string outputPath)
