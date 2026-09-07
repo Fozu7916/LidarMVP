@@ -2,146 +2,195 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Лидар-БИМ: Визуализация облака точек (Three.js)</title>
+    <title>Лидар-БИМ: 4D Мониторинг Выработки</title>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #1a1a1a;
-            font-family: sans-serif;
+        body { margin: 0; overflow: hidden; background-color: #121212; font-family: 'Segoe UI', sans-serif; color: #fff; }
+        
+        #dashboard {
+            position: absolute; top: 20px; left: 20px; width: 340px;
+            background: rgba(20, 25, 30, 0.9); border: 1px solid #334; border-radius: 8px;
+            padding: 25px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); backdrop-filter: blur(5px);
         }
-        #info {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: #ffffff;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px 15px;
-            border-radius: 5px;
-            font-size: 14px;
-            pointer-events: none;
-            z-index: 100;
+        
+        h2 { margin: 0 0 20px 0; font-size: 16px; color: #4DA8DA; text-transform: uppercase; border-bottom: 1px solid #334; padding-bottom: 15px; letter-spacing: 1px; }
+        
+        .metric { margin-bottom: 25px; padding: 15px; background: rgba(0, 230, 118, 0.1); border-left: 4px solid #00E676; border-radius: 4px; }
+        .metric-label { font-size: 13px; color: #AAB; text-transform: uppercase; font-weight: bold; margin-bottom: 8px; }
+        .metric-value { font-size: 32px; font-weight: bold; color: #00E676; text-shadow: 0 0 10px rgba(0, 230, 118, 0.3); }
+        .metric-value span { font-size: 16px; color: #889; font-weight: normal; }
+        
+        .filename-text { font-size: 11px; color: #667; margin-top: 10px; display: block; text-align: right; }
+
+        .controls { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; max-height: 300px; overflow-y: auto; }
+        button {
+            padding: 12px 15px; background: #2A3644; border: 1px solid #445; text-align: left;
+            color: #fff; border-radius: 4px; cursor: pointer; font-weight: bold; transition: all 0.2s ease;
+            display: flex; justify-content: space-between; align-items: center;
         }
+        button:hover { background: #3B4D61; border-color: #556; }
+        button.active { background: #4DA8DA; color: #000; border-color: #4DA8DA; box-shadow: 0 0 15px rgba(77, 168, 218, 0.4); }
+        button .status { font-size: 11px; opacity: 0.7; }
+        button.active .status { font-weight: bolder; opacity: 1; }
+
         #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: #ffffff;
-            font-size: 20px;
-            font-weight: bold;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 20px 30px;
-            border-radius: 8px;
-            z-index: 200;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 18px; background: rgba(0, 0, 0, 0.8); padding: 20px 40px;
+            border-radius: 8px; border: 1px solid #4DA8DA; z-index: 100;
+            box-shadow: 0 0 20px rgba(77, 168, 218, 0.2);
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        <h3>Лидар-БИМ Просмотр</h3>
-        <p>Левая кнопка мыши + движение: Вращение</p>
-        <p>Правая кнопка мыши + движение: Смещение (Pan)</p>
-        <p>Колесико мыши: Масштаб (Zoom)</p>
-    </div>
-    <div id="loading">Загрузка мастер-облака точек...</div>
 
-    <!-- Подключаем Three.js и OrbitControls через надежный CDN -->
+    <div id="loading">Загрузка и синхронизация сканов...</div>
+
+    <div id="dashboard" style="display: none;">
+        <h2>Сводка горных работ</h2>
+        
+        <div class="metric">
+            <div class="metric-label">Объем извлеченной породы</div>
+            <div class="metric-value" id="val-extracted-total">0.00 <span>м³</span></div>
+            <span class="filename-text" id="val-filename">Базовая Эпоха 0</span>
+        </div>
+
+        <div class="controls" id="btn-container">
+            <!-- Кнопки генерируются динамически -->
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
     <script>
         let scene, camera, renderer, controls;
+        let epochsData = [];
+        let pointClouds = []; 
 
         init();
-        animate();
+        loadData();
 
         function init() {
-            // Создаем сцену
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x111111);
+            scene.background = new THREE.Color(0x0a0a0a);
 
-            // Настройка камеры с корректными плоскостями отсечения (защита от багов зума в Chrome)
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000.0);
-            camera.position.set(15, 10, 15);
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(15, 15, 15);
 
-            // Рендерер с поддержкой плавности
             renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             document.body.appendChild(renderer.domElement);
 
-            // Управление орбитой
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
-            controls.minDistance = 0.1;
-            controls.maxDistance = 200.0;
 
-            // Добавляем сетку для ориентации в пространстве
-            const gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
-            gridHelper.position.y = 0;
-            scene.add(gridHelper);
+            const grid = new THREE.GridHelper(40, 40, 0x333344, 0x111118);
+            scene.add(grid);
 
-            // Загружаем файл облака точек (.xyz)
-            loadXyzFile('global_master_map.xyz');
-
-            // Обработка изменения размера окна
             window.addEventListener('resize', onWindowResize, false);
+            animate();
         }
 
-        function loadXyzFile(url) {
-            fetch(url)
-                .then(response => {
-                    if (!response.ok) throw new Error("Файл .xyz не найден или сервер не смог его отдать.");
-                    return response.text();
-                })
-                .then(text => {
-                    const lines = text.split('\n');
-                    const positions = [];
-                    const colors = [];
+        async function loadData() {
+            try {
+                const metaResponse = await fetch('meta.json');
+                if (!metaResponse.ok) throw new Error("Файл метаданных не найден.");
+                const metaJson = await metaResponse.json();
+                epochsData = metaJson.Epochs;
 
-                    for (let i = 0; i < lines.length; i++) {
-                        const line = lines[i].trim();
-                        if (!line) continue;
+                const btnContainer = document.getElementById('btn-container');
 
-                        const parts = line.split(/\s+/);
-                        if (parts.length >= 6) {
-                            // Координаты X, Y, Z
-                            positions.push(parseFloat(parts[0]), parseFloat(parts[1]), parseFloat(parts[2]));
-                            // Цвета R, G, B (нормализуем от 0 до 1)
-                            colors.push(parseInt(parts[3]) / 255, parseInt(parts[4]) / 255, parseInt(parts[5]) / 255);
-                        }
-                    }
+                const fetchPromises = epochsData.map(ep => fetch(ep.BinFile).then(res => res.arrayBuffer()));
+                const buffers = await Promise.all(fetchPromises);
 
-                    const geometry = new THREE.BufferGeometry();
-                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                for (let i = 0; i < epochsData.length; i++) {
+                    const ep = epochsData[i];
+                    
+                    const cloud = createPointCloud(buffers[i]);
+                    cloud.visible = (i === 0); 
+                    scene.add(cloud);
+                    pointClouds.push(cloud);
 
-                    // Материал точек
-                    const material = new THREE.PointsMaterial({
-                        size: 0.04,
-                        vertexColors: true
-                    });
+                    const btn = document.createElement('button');
+                    const labelSpan = document.createElement('span');
+                    labelSpan.innerText = `Эпоха ${ep.Id}`;
+                    
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = 'status';
+                    statusSpan.innerText = i === 0 ? "БАЗИС" : `+${ep.ExtractedTotal.toLocaleString('ru-RU')} м³`;
+                    
+                    btn.appendChild(labelSpan);
+                    btn.appendChild(statusSpan);
+                    
+                    if (i === 0) btn.classList.add('active');
+                    
+                    btn.onclick = () => selectEpoch(i, btn);
+                    btnContainer.appendChild(btn);
+                }
 
-                    const pointCloud = new THREE.Points(geometry, material);
-                    scene.add(pointCloud);
-
-                    // Центрируем камеру по центру масс облака точек
-                    geometry.computeBoundingSphere();
-                    const center = geometry.boundingSphere.center;
+                if (pointClouds.length > 0) {
+                    pointClouds[0].geometry.computeBoundingSphere();
+                    const center = pointClouds[0].geometry.boundingSphere.center;
                     controls.target.copy(center);
-                    camera.position.set(center.x + 10, center.y + 8, center.z + 10);
                     controls.update();
+                    
+                    selectEpoch(0, btnContainer.firstElementChild); 
+                }
 
-                    // Убираем экран загрузки
-                    document.getElementById('loading').style.display = 'none';
-                })
-                .catch(error => {
-                    console.error(error);
-                    document.getElementById('loading').innerText = "Ошибка: не удалось загрузить global_master_map.xyz. Сначала выполните сборку в консоли!";
-                    document.getElementById('loading').style.background = "rgba(150, 0, 0, 0.9)";
-                });
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+
+            } catch (error) {
+                document.getElementById('loading').innerText = "Ошибка: " + error.message;
+                document.getElementById('loading').style.borderColor = "#FF3333";
+            }
+        }
+
+        function selectEpoch(index, btnElement) {
+            for (let i = 0; i < pointClouds.length; i++) {
+                pointClouds[i].visible = (i === index);
+            }
+
+            const buttons = document.getElementById('btn-container').children;
+            for (let i = 0; i < buttons.length; i++) {
+                buttons[i].classList.remove('active');
+            }
+            btnElement.classList.add('active');
+
+            const ep = epochsData[index];
+            document.getElementById('val-extracted-total').innerHTML = `${ep.ExtractedTotal.toLocaleString('ru-RU')} <span>м³</span>`;
+            document.getElementById('val-filename').innerText = `Источник: ${ep.Name}`;
+        }
+
+        function createPointCloud(buffer) {
+            const POINT_STRIDE = 16;
+            const numPoints = Math.floor(buffer.byteLength / POINT_STRIDE);
+            
+            const positions = new Float32Array(numPoints * 3);
+            const colors = new Float32Array(numPoints * 3);
+            const dataView = new DataView(buffer);
+            
+            let byteOffset = 0, pIdx = 0;
+
+            for (let i = 0; i < numPoints; i++) {
+                positions[pIdx]     = dataView.getFloat32(byteOffset, true);
+                positions[pIdx + 1] = dataView.getFloat32(byteOffset + 4, true);
+                positions[pIdx + 2] = dataView.getFloat32(byteOffset + 8, true);
+
+                colors[pIdx]     = dataView.getUint8(byteOffset + 12) / 255.0;
+                colors[pIdx + 1] = dataView.getUint8(byteOffset + 13) / 255.0;
+                colors[pIdx + 2] = dataView.getUint8(byteOffset + 14) / 255.0;
+
+                byteOffset += POINT_STRIDE;
+                pIdx += 3;
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            return new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.04, vertexColors: true }));
         }
 
         function onWindowResize() {

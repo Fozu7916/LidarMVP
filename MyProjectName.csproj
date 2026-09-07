@@ -12,6 +12,9 @@
   </None>
   
 </ItemGroup>
+ <ItemGroup>
+   <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+ </ItemGroup>
 
 <!-- Автоматическая сборка релиза и архивация средствами MSBuild -->
   <Target Name="PublishAndZip" AfterTargets="Publish">
