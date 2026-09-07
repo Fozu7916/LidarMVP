@@ -1,75 +1,50 @@
-PROCESSING 6 MILLION POINTS IN ~3 SECONDS
-This is the MVP of the DroneLiDAR-BIM Automated Construction Monitoring System.
-1) We receive CSV + ply data (or, if it's not available, we automatically generate test stubs)
-2) We generate an .xyz file (processing phantom errors with classifiers)
-3) We render this .xyz file on the web
-<img width="744" height="347" alt="image" src="https://github.com/user-attachments/assets/32217b33-4c23-4915-a397-e7f27a720f0e" />
+DroneLiDAR-BIM: Высокопроизводительная автоматизированная система мониторинга строительства
+ОБРАБОТКА МИЛЛИОНОВ ТОЧЕК ЗА СЕКУНДЫ.
 
-There are also two automatic data generation options:
+Это MVP автоматизированной системы мониторинга строительства DroneLiDAR-BIM, оптимизированная для обработки данных с промышленных дронов (например, DJI Matrice 350 RTK + Zenmuse L2). Система обрабатывает необработанные облака точек LiDAR, автоматически компенсирует дрейф дрона, рассчитывает объемы земляных работ и мгновенно отображает результаты в браузере.
 
-- A house in a Python file (there is a darkened section)
+🔥 Основные функции
+Ввод промышленных данных: Нативно считывает промышленные бинарные файлы .las (стандарт ASPRS) непосредственно из программного обеспечения дрона, такого как DJI Terra. Также поддерживаются устаревшие файлы телеметрии .ply + .csv.
 
-- Three boxes are generated automatically when the CLI is launched to avoid causing exceptions due to Lack of .ply and .csv files
+Математическое ядро ​​(ICP и объемная обработка):
 
-To understand how the code works
-- The lidar.cs library, which can be integrated anywhere (UI, web, etc.)
-- CLI (essentially a UI, but in a console for control and logging) - Program.cs
-- A file that converts points into a 3D view from a raw .xyz file (viewer.html - renderer, transferring data from Program.cs)
+Разрешение столкновений: Автоматическая компенсация колебаний дрона и дрейфа IMU с использованием алгоритма итеративного поиска ближайшей точки (ICP) на основе пространственной индексации KD-Tree.
 
-How it works:
-We receive the drone's position (.csv) and lidar readings (.ply) from the drone.
+Расчет земляных работ: Расчет точного объема извлеченного материала с использованием метода 2.5D DEM для выемки и насыпи грунта.
 
-IMPORTANT: To be linked by the program, the .csv and .ply files must have the same name (e.g., N.csv + N.ply).
+Высокоскоростной экспорт: Генерация стандартных файлов .xyz для интеграции с CAD/BIM и сверхбыстрых бинарных потоков .bin без выделения памяти для веб-сайта.
 
-All "squares" obtained from the scan are combined into a single .xyz file. This can then be rendered directly in the program in a browser, if desired.
-dotnet add package MathNet.Numerics
+4D веб-визуализация: Отображение облака точек непосредственно в браузере. Включает интерактивный переключатель «До/После» и панель мониторинга, отображающую рассчитанные объемы извлечения непосредственно в веб-браузере.
 
-
-DroneLiDAR-BIM: High-Performance Automated Construction Monitoring
-PROCESSING MILLIONS OF POINTS IN SECONDS.
-
-This is the MVP of the DroneLiDAR-BIM Automated Construction Monitoring System, optimized for industrial drone data (e.g., DJI Matrice 350 RTK + Zenmuse L2). The system processes raw LiDAR point clouds, automatically compensates for drone drift, calculates earthwork volumes, and renders the results instantly in a browser.
-
-🔥 Core Features
-Industrial Data Ingestion: Natively reads industrial binary .las files (ASPRS standard) directly from drone software like DJI Terra. Legacy .ply + .csv telemetry is also supported.
-
-Mathematical Core (ICP & Volumetrics):
-
-Collision Resolution: Automatically compensates for drone sway and IMU drift using the Iterative Closest Point (ICP) algorithm powered by KD-Tree spatial indexing.
-
-Earthwork Calculation: Calculates the exact volume of extracted material using the Cut-and-Fill 2.5D DEM method.
-
-High-Speed Export: Generates standard .xyz files for CAD/BIM integration and ultra-fast, zero-allocation binary .bin streams for the web.
-
-4D Web Visualization: Renders the point cloud directly in the browser. Features a "Before/After" interactive toggle and a dashboard displaying the calculated extraction volumes directly on the web.
-
-🚀 Prerequisites
-The mathematical core relies on MathNet.Numerics for heavy linear algebra and Singular Value Decomposition (SVD). Before running the project, you must install this dependency:
+🚀 Предварительные требования
+Математическое ядро ​​использует MathNet.Numerics для сложных линейных алгебраических вычислений и сингулярного разложения (SVD). Перед запуском проекта необходимо установить следующую зависимость:
 
 Bash
 dotnet add package MathNet.Numerics
-🛠 Architecture & How It Works
-The system is decoupled into highly optimized modules that can be integrated anywhere:
+🛠 Архитектура и принцип работы
+Система разделена на высокооптимизированные модули, которые можно интегрировать в любое место:
 
-Lidar.cs (The Engine): The high-performance core library. Handles zero-allocation binary parsing of .las/.ply files and Voxel grid deduplication.
+Lidar.cs (Движок): Высокопроизводительная основная библиотека. Обрабатывает бинарный анализ файлов .las/.ply без выделения памяти и дедупликацию воксельной сетки.
 
-MathApparatus.cs (The Brain): The mathematical solver. Implements KD-Tree, ICP alignment (SVD-based), and volumetric calculations.
+MathApparatus.cs (Мозг): Математический решатель. Реализует KD-дерево, выравнивание ICP (на основе SVD) и объемные вычисления.
 
-Program.cs (The CLI): Orchestrates the pipeline, acts as the control interface, and hosts the local HTTP server for the web viewer.
+Program.cs (CLI): Организует конвейер, выступает в качестве интерфейса управления и размещает локальный HTTP-сервер для веб-просмотрщика.
 
-viewer.html (The Frontend): A Three.js WebGL renderer. Fetches binary .bin buffers and meta.json to instantly visualize the 3D environment and production metrics without crashing the browser.
+viewer.html (Фронтенд): Рендерер WebGL на Three.js. Получает бинарные буферы .bin и meta.json для мгновенной визуализации 3D-среды и производственных метрик без сбоев браузера.
 
-⚙️ The Pipeline Workflow
-Drop your .las files (Strips/Gals) into the working directory.
+⚙️ Рабочий процесс конвейера
+Перетащите ваши файлы .las (Strips/Gals) в рабочий каталог.
 
-The program takes the first scan as a rigid reference.
+Программа использует первое сканирование в качестве жесткого эталона.
 
-Subsequent scans are algorithmically aligned to the reference using ICP to eliminate "double walls" caused by wind drift.
+Последующие сканирования алгоритмически выравниваются относительно эталона с помощью ICP для устранения «двойных стенок», вызванных ветровым дрейфом.
 
-The merged cloud is voxel-filtered and projected into a 2.5D grid to calculate the extracted volume.
+Объединенное облако фильтруется по вокселям и проецируется на 2,5D-сетку для расчета извлеченного объема.
 
-Results are exported to the Web UI for presentation.
+Результаты экспортируются в веб-интерфейс для отображения.
 
-🧪 Autonomous Data Generation (Demo Mode)
-You don't need real drone data to test the system.
-If the CLI is launched in an empty directory, it will automatically generate synthetic industrial .las files representing two epochs ("Before" and "After" excavation) with simulated drone drift. The system will align them, calculate the volume of the "excavated" pit, and display the results in the web visualizer to prevent runtime exceptions and allow immediate testing.
+🧪 Автономная генерация данных (демонстрационный режим)
+Для тестирования системы вам не нужны реальные данные с дронов.
+Если CLI запущен в пустом каталоге, он автоматически сгенерирует синтетические промышленные файлы .las, представляющие 3 эпохи с имитацией дрейфа дрона. Система выровняет их, рассчитает объем «выкопанной» ямы и отобразит результаты в веб-визуализаторе, чтобы предотвратить исключения во время выполнения и позволить немедленно провести тестирование.
+
+берём .las файлы с лидара, lidar.cs - библиотека, которая сырые файлы превращает в массив 3д точек(xyz + rgb). Math.cs обрабатывает разницу между снимками(обьёма), стабилизирует данные от дрейфа ветра и тд.Program.cs - cli интерфейс, совмещающий все библиотеки. viever.html - фронтенд для демонстрации разницы обьёма + визуализации обьёкта
