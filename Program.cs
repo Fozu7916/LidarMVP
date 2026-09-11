@@ -11,10 +11,18 @@ using LidarProcessorMVP;
 
 namespace LidarRunner
 {
+    public enum SceneType
+    {
+        Quarry,    // Карьерная куча/насыпь
+        Warehouse, // Склад коробок/паллет
+        Crater     // Котлован/кратер (заглубление)
+    }
+
     class Program
     {
         private static string workDirectory = Directory.GetCurrentDirectory();
-        private static float voxelStep = 0.15f; 
+        private static float voxelStep = 0.15f;
+        private static SceneType selectedScene = SceneType.Quarry;
 
         static void Main(string[] args)
         {
@@ -27,23 +35,26 @@ namespace LidarRunner
                 Console.WriteLine("   ЛИДАР-БИМ: ПРОФИЛИРУЕМЫЙ N-МЕРНЫЙ 4D МОНИТОРИНГ        ");
                 Console.WriteLine("==========================================================");
                 Console.WriteLine($" [ Каталог ]: {workDirectory}");
+                Console.WriteLine($" [ Тип генератора по умолчанию ]: {selectedScene}");
 
                 if (files.Count > 0)
                 {
-                    Console.WriteLine($" [ Тип     ]: {(isLas ? "LAS (Промышленный)" : "PLY (Текстовый)")}");
-                    Console.WriteLine($" [ Сканов  ]: {files.Count} шт.");
+                    Console.WriteLine($" [ Формат файлов ]: {(isLas ? "LAS (Промышленный)" : "PLY (Текстовый)")}");
+                    Console.WriteLine($" [ Сканов в папке]: {files.Count} шт.");
                 }
                 else
                 {
-                    Console.WriteLine($" [ Статус  ]: Файлы не найдены. Готов к автогенерации.");
+                    Console.WriteLine($" [ Статус  ]: Файлы не найдены. Готов к синтетической генерации.");
                 }
 
                 Console.WriteLine("----------------------------------------------------------");
-                Console.WriteLine(" 1. Задать путь к папке со сканами");
+                Console.WriteLine(" 1. Задать путь к рабочей папке");
                 Console.WriteLine(" 2. Настроить шаг воксельной сетки");
-                Console.WriteLine(" 3. [ЗАПУСК] Обработка с детальным профилированием времени");
-                Console.WriteLine(" 4. Открыть Web-визуализатор (Three.js)");
-                Console.WriteLine(" 5. Выход");
+                Console.WriteLine(" 3. Выбрать сцену генерации (Куча / Склад / Котлован)");
+                Console.WriteLine(" 4. Сгенерировать синтетические сканы (С техникой и этапами)");
+                Console.WriteLine(" 5. [ЗАПУСК] Полная обработка сканов, расчет объемов и экспорт");
+                Console.WriteLine(" 6. Запустить Web-визуализатор (Three.js)");
+                Console.WriteLine(" 7. Выход");
                 Console.WriteLine("==========================================================");
                 Console.Write(" Выберите пункт: ");
 
@@ -54,13 +65,15 @@ namespace LidarRunner
                 {
                     case ConsoleKey.D1: ConfigureDirectory(); break;
                     case ConsoleKey.D2: ConfigureVoxel(); break;
-                    case ConsoleKey.D3: 
-                        RunNDPipeline(files); 
+                    case ConsoleKey.D3: SelectSceneType(); break;
+                    case ConsoleKey.D4: GenerateCustomEpochs(); break;
+                    case ConsoleKey.D5:
+                        RunNDPipeline(files);
                         Console.WriteLine("\nНажмите любую клавишу для возврата в меню...");
                         Console.ReadKey();
                         break;
-                    case ConsoleKey.D4: ShowWebVisualizer(); break;
-                    case ConsoleKey.D5: return;
+                    case ConsoleKey.D6: ShowWebVisualizer(); break;
+                    case ConsoleKey.D7: return;
                 }
             }
         }
@@ -69,7 +82,7 @@ namespace LidarRunner
         {
             if (!Directory.Exists(dir)) return (new List<string>(), false);
             var lasFiles = new List<string>(Directory.GetFiles(dir, "*.las"));
-            lasFiles.Sort(); 
+            lasFiles.Sort();
             if (lasFiles.Count > 0) return (lasFiles, true);
 
             var plyFiles = new List<string>(Directory.GetFiles(dir, "*.ply"));
@@ -96,22 +109,68 @@ namespace LidarRunner
                 voxelStep = s;
         }
 
+        static void SelectSceneType()
+        {
+            Console.Clear();
+            Console.WriteLine("Выберите тип генерируемой сцены:");
+            Console.WriteLine(" 1. Карьерная куча / Насыпь (с экскаватором и самосвалами)");
+            Console.WriteLine(" 2. Промышленный склад (стеллажи, штабели коробок, погрузчик)");
+            Console.WriteLine(" 3. Котлован / Кратер под фундамент (выемка вглубь, техника)");
+            Console.Write("Ваш выбор: ");
+            var k = Console.ReadKey(true);
+            switch (k.Key)
+            {
+                case ConsoleKey.D1: selectedScene = SceneType.Quarry; break;
+                case ConsoleKey.D2: selectedScene = SceneType.Warehouse; break;
+                case ConsoleKey.D3: selectedScene = SceneType.Crater; break;
+            }
+        }
+
+        static void GenerateCustomEpochs()
+        {
+            Console.Clear();
+            Console.WriteLine($"Генерация сканов для типа: {selectedScene}");
+            Console.Write("Сколько этапов выемки/уборки сгенерировать после базиса? (по умолчанию 3): ");
+            string? input = Console.ReadLine();
+            int nStages = 3;
+            if (int.TryParse(input, out int parsed) && parsed > 0) nStages = parsed;
+
+            // Очищаем старые файлы в каталоге
+            foreach (var f in Directory.GetFiles(workDirectory, "epoch_*.las")) File.Delete(f);
+            foreach (var f in Directory.GetFiles(workDirectory, "epoch_*.bin")) File.Delete(f);
+
+            Console.WriteLine("\n[1/2] Создание скана Этапа 1 (Сырой скан до удаления техники)...");
+            string rawFile = Path.Combine(workDirectory, "epoch_0_raw_with_machinery.las");
+            GenerateSyntheticLas(rawFile, selectedScene, stageFraction: 0.0f, includeMachinery: true, driftOffset: 0.0f);
+
+            Console.WriteLine("[2/2] Создание скана Этапа 2 (Базис: техника помечена к удалению, геометрия принята за стартовую)...");
+            string cleanedBase = Path.Combine(workDirectory, "epoch_1_base_cleaned.las");
+            // Алгоритм удаления пока не написан, поэтому техника пока остается в облаке точек
+            GenerateSyntheticLas(cleanedBase, selectedScene, stageFraction: 0.0f, includeMachinery: true, driftOffset: 0.01f);
+
+            for (int i = 1; i <= nStages; i++)
+            {
+                float frac = (float)i / nStages;
+                Console.WriteLine($"[+] Создание этапа выработки {i}/{nStages} (прогресс: {frac * 100:F0}%)...");
+                string stageFile = Path.Combine(workDirectory, $"epoch_{i + 1}_progress_stage_{i}.las");
+                GenerateSyntheticLas(stageFile, selectedScene, stageFraction: frac, includeMachinery: true, driftOffset: 0.02f * i);
+            }
+
+            Console.WriteLine("\n[УСПЕХ] Файлы сгенерированы! Теперь выполните пункт 5 (Обработка).");
+            Console.WriteLine("Нажмите любую клавишу...");
+            Console.ReadKey();
+        }
+
         static void RunNDPipeline(List<string> inputFiles)
         {
             Console.WriteLine("\n=== 1. ПОДГОТОВКА ДАННЫХ И ПРОФИЛИРОВАНИЕ ===");
 
             if (inputFiles.Count == 0)
             {
-                Console.WriteLine("[ИНФО] Данных нет. Генерируем 3 эпохи карьера (около 100k точек каждая)...");
-                string e0 = Path.Combine(workDirectory, "epoch_0_base.las");
-                string e1 = Path.Combine(workDirectory, "epoch_1_dig1.las");
-                string e2 = Path.Combine(workDirectory, "epoch_2_dig2.las");
-
-                GenerateSyntheticLas(e0, 0.00f, 0.0f, 0.0f);
-                GenerateSyntheticLas(e1, 0.03f, 4.0f, 2.0f);
-                GenerateSyntheticLas(e2, 0.05f, 6.5f, 4.0f);
-
-                inputFiles.AddRange(new[] { e0, e1, e2 });
+                Console.WriteLine("[ИНФО] Сканы не найдены. Автоматический запуск генерации по умолчанию...");
+                GenerateCustomEpochs();
+                var scanned = ScanWorkDirectory(workDirectory);
+                inputFiles = scanned.files;
             }
 
             Stopwatch globalSw = Stopwatch.StartNew();
@@ -119,7 +178,7 @@ namespace LidarRunner
 
             List<Vector3>? baseVectors = null;
             List<Point3D>? baseCloud = null;
-            
+
             var metaEpochs = new List<object>();
             float cellSize = Math.Max(0.1f, voxelStep * 2.0f);
 
@@ -127,26 +186,51 @@ namespace LidarRunner
             {
                 string currentFile = inputFiles[i];
                 string binFile = $"epoch_{i}.bin";
-                
-                Console.WriteLine($"\n=== ЭПОХА {i}: {Path.GetFileName(currentFile)} ===");
+
+                string stageType;
+                string stageTitle;
+                string description;
+
+                if (i == 0)
+                {
+                    stageType = "RAW_SCAN";
+                    stageTitle = "Этап 1: До очистки техники";
+                    description = "Сырой скан объекта. Вся техника, персонал и вспомогательное оборудование в зоне.";
+                }
+                else if (i == 1)
+                {
+                    stageType = "CLEANED_BASE";
+                    stageTitle = "Этап 2: Базовый горизонт";
+                    description = "Техника классифицирована алгоритмами. Объект принят за нулевой стартовый базис.";
+                }
+                else
+                {
+                    stageType = "EXCAVATION_PROGRESS";
+                    stageTitle = $"Этап {i + 1}: Выработка #{i - 1}";
+                    description = selectedScene == SceneType.Warehouse
+                        ? $"Постепенная отгрузка товаров со склада (шаг {i - 1})"
+                        : $"Динамика выемки горной массы (шаг {i - 1})";
+                }
+
+                Console.WriteLine($"\n=== {stageTitle.ToUpper()} : {Path.GetFileName(currentFile)} ===");
 
                 Stopwatch epochSw = Stopwatch.StartNew();
-                
-                // ЭТАП 1: Чтение
+
+                // ЭТАП ЧТЕНИЯ
                 Stopwatch readSw = Stopwatch.StartNew();
                 var currentPoints = LidarPipeline.LoadScanAuto(currentFile);
                 readSw.Stop();
-                Console.WriteLine($"  [Тайминг] Чтение файла: {readSw.ElapsedMilliseconds} мс (Загружено: {currentPoints.Count} точек)");
+                Console.WriteLine($"  [Тайминг] Чтение: {readSw.ElapsedMilliseconds} мс ({currentPoints.Count} точек)");
 
                 var masterCloud = new List<Point3D>();
 
-                // ЭТАП 2: ICP Выравнивание
+                // ЭТАП ICP
                 if (baseVectors != null)
                 {
                     Stopwatch icpSw = Stopwatch.StartNew();
                     var currentVectors = ExtractVectors(currentPoints);
                     var (icpTransform, error) = MathApparatus.AlignCloudsICP(currentVectors, baseVectors, 10);
-                    
+
                     for (int j = 0; j < currentPoints.Count; j++)
                     {
                         var p = currentPoints[j];
@@ -154,59 +238,77 @@ namespace LidarRunner
                         masterCloud.Add(new Point3D(v.X, v.Y, v.Z, p.R, p.G, p.B));
                     }
                     icpSw.Stop();
-                    Console.WriteLine($"  [Тайминг] Выравнивание (ICP + Трансформ): {icpSw.ElapsedMilliseconds} мс. Невязка: {error:F4} м");
+                    Console.WriteLine($"  [Тайминг] ICP стабилизация: {icpSw.ElapsedMilliseconds} мс. Невязка: {error:F4} м");
                 }
                 else
                 {
                     masterCloud.AddRange(currentPoints);
-                    Console.WriteLine("  -> Базис зафиксирован (выравнивание не требуется).");
+                    Console.WriteLine("  -> Фиксация нулевой системы координат.");
                 }
 
-                // ЭТАП 3: Дедупликация (Voxel Filter)
+                // ВОКСЕЛЬНАЯ ФИЛЬТРАЦИЯ
                 Stopwatch voxelSw = Stopwatch.StartNew();
                 var optimizedCloud = LidarPipeline.VoxelFilter(masterCloud, voxelStep);
                 voxelSw.Stop();
-                Console.WriteLine($"  [Тайминг] Воксельная фильтрация: {voxelSw.ElapsedMilliseconds} мс. Осталось точек: {optimizedCloud.Count}");
+                Console.WriteLine($"  [Тайминг] Воксельная дедупликация: {voxelSw.ElapsedMilliseconds} мс. Итог: {optimizedCloud.Count} точек");
 
-                // ЭТАП 4: Расчет объемов
+                // РАСЧЕТ ОБЪЕМОВ
                 double extractedTotal = 0;
                 Stopwatch volumeSw = Stopwatch.StartNew();
+
                 if (i == 0)
                 {
+                    // Сырой скан не является расчетной базой выемки
+                    extractedTotal = 0.0;
+                }
+                else if (i == 1)
+                {
+                    // Этап 2 фиксируется как опорный базис для всех последующих стадий
                     baseCloud = optimizedCloud;
                     baseVectors = ExtractVectors(optimizedCloud);
+                    extractedTotal = 0.0;
                 }
                 else
                 {
+                    // Для склада объем рассчитывается как объем освобожденного пространства,
+                    // для карьера/кратера — объем извлеченной породы
                     extractedTotal = MathApparatus.CalculateVolumeDifference(baseCloud!, optimizedCloud, cellSize);
                 }
                 volumeSw.Stop();
-                if (i > 0) Console.WriteLine($"  [Тайминг] Расчет объемов: {volumeSw.ElapsedMilliseconds} мс");
-                Console.WriteLine($"  -> ИЗВЛЕЧЕНО ПОРОДЫ: {extractedTotal:N2} м3");
 
-                // ЭТАП 5: Экспорт
+                Console.WriteLine($"  [Тайминг] Расчет объемов: {volumeSw.ElapsedMilliseconds} мс");
+                Console.WriteLine($"  -> ИЗМЕНЕНИЕ ОБЪЕМА: {extractedTotal:N2} м3");
+
+                // ЭКСПОРТ В BIN
                 Stopwatch exportSw = Stopwatch.StartNew();
                 LidarPipeline.ExportToBinary(optimizedCloud, Path.Combine(workDirectory, binFile));
                 exportSw.Stop();
-                Console.WriteLine($"  [Тайминг] Запись .bin файла: {exportSw.ElapsedMilliseconds} мс");
+                Console.WriteLine($"  [Тайминг] Экспорт в бинарный поток: {exportSw.ElapsedMilliseconds} мс");
 
                 epochSw.Stop();
-                Console.WriteLine($"  => Эпоха {i} завершена за общее время {epochSw.ElapsedMilliseconds} мс");
 
-                metaEpochs.Add(new 
-                { 
-                    Id = i, 
-                    Name = Path.GetFileName(currentFile), 
+                metaEpochs.Add(new
+                {
+                    Id = i,
+                    StageType = stageType,
+                    Title = stageTitle,
+                    Description = description,
+                    Name = Path.GetFileName(currentFile),
                     BinFile = binFile,
                     ExtractedTotal = Math.Round(extractedTotal, 2)
                 });
             }
 
-            var metaData = new { Epochs = metaEpochs };
-            File.WriteAllText(Path.Combine(workDirectory, "meta.json"), JsonSerializer.Serialize(metaData));
+            var metaData = new
+            {
+                Scene = selectedScene.ToString(),
+                Epochs = metaEpochs
+            };
+
+            File.WriteAllText(Path.Combine(workDirectory, "meta.json"), JsonSerializer.Serialize(metaData, new JsonSerializerOptions { WriteIndented = true }));
 
             globalSw.Stop();
-            Console.WriteLine($"\n[УСПЕХ] ВЕСЬ ПАЙПЛАЙН ЗАВЕРШЕН ЗА {globalSw.ElapsedMilliseconds} мс.");
+            Console.WriteLine($"\n[УСПЕХ] ОБРАБОТКА ВСЕХ СКАНИРОВАНИЙ ЗАВЕРШЕНА ЗА {globalSw.ElapsedMilliseconds} мс.");
         }
 
         static List<Vector3> ExtractVectors(List<Point3D> points)
@@ -216,72 +318,302 @@ namespace LidarRunner
             return list;
         }
 
-        static void GenerateSyntheticLas(string lasPath, float driftOffset, float craterRadius, float digDepthMax)
+        // =========================================================================
+        // ГЕНЕРАТОР ПРОИЗВОДСТВЕННЫХ СЦЕН (НАСЫПЬ, СКЛАД, КОТЛОВАН + ТЕХНИКА)
+        // =========================================================================
+        public static void GenerateSyntheticLas(string lasPath, SceneType sceneType, float stageFraction, bool includeMachinery, float driftOffset)
         {
-            float step = 0.1f;
-            float min = -15.0f, max = 15.0f;
-            int steps = (int)((max - min) / step) + 1;
-            uint totalPoints = (uint)(steps * steps);
+            var points = new List<Point3D>(150000);
+
+            switch (sceneType)
+            {
+                case SceneType.Quarry:
+                    GenerateQuarryPoints(points, stageFraction);
+                    if (includeMachinery) AddQuarryMachinery(points);
+                    break;
+
+                case SceneType.Warehouse:
+                    GenerateWarehousePoints(points, stageFraction);
+                    if (includeMachinery) AddWarehouseMachinery(points);
+                    break;
+
+                case SceneType.Crater:
+                    GenerateCraterPoints(points, stageFraction);
+                    if (includeMachinery) AddCraterMachinery(points);
+                    break;
+            }
+
+            WriteLasFile(lasPath, points, driftOffset);
+        }
+
+        private static void GenerateQuarryPoints(List<Point3D> points, float digFraction)
+        {
+            float step = 0.12f;
+            float min = -16.0f, max = 16.0f;
+
+            for (float x = min; x <= max; x += step)
+            {
+                for (float y = min; y <= max; y += step)
+                {
+                    float r = MathF.Sqrt(x * x + y * y);
+                    float baseZ = (x * 0.05f) + (y * 0.04f);
+                    float z = baseZ;
+
+                    // Насыпная куча в центре (радиус 10м, высота до 5м)
+                    if (r < 10.0f)
+                    {
+                        z += 5.0f * MathF.Cos(r * MathF.PI / 20.0f);
+                    }
+
+                    // Зона ступенчатой выемки
+                    if (digFraction > 0.0f)
+                    {
+                        float pitDist = MathF.Sqrt((x - 2.0f) * (x - 2.0f) + (y + 1.5f) * (y + 1.5f));
+                        float pitRadius = 6.0f * digFraction + 1.0f;
+                        if (pitDist < pitRadius)
+                        {
+                            float digDepth = (4.5f * digFraction) * MathF.Cos(pitDist * MathF.PI / (pitRadius * 2.0f));
+                            z -= digDepth;
+                            if (z < baseZ + 0.2f) z = baseZ + 0.2f;
+                        }
+                    }
+
+                    // Микрорельеф и шум
+                    z += (MathF.Sin(x * 2.5f) * MathF.Cos(y * 2.5f)) * 0.1f;
+
+                    byte rC = 120, gC = 110, bC = 95; // Земля / порода
+                    if (r < 10.0f)
+                    {
+                        rC = 175; gC = 145; bC = 100; // Песчано-гравийная насыпь
+                    }
+
+                    points.Add(new Point3D(x, z, y, rC, gC, bC));
+                }
+            }
+        }
+
+        private static void GenerateWarehousePoints(List<Point3D> points, float pickupFraction)
+        {
+            float step = 0.12f;
+            float min = -14.0f, max = 14.0f;
+
+            // Пол склада и стены
+            for (float x = min; x <= max; x += step)
+            {
+                for (float y = min; y <= max; y += step)
+                {
+                    float z = 0.0f; // Бетонный гладкий пол
+                    byte rC = 160, gC = 165, bC = 175;
+
+                    // Нанесение дорожной разметки на складе (желтые полосы)
+                    if (MathF.Abs(x) < 0.25f || MathF.Abs(y) < 0.25f)
+                    {
+                        rC = 230; gC = 190; bC = 20;
+                    }
+
+                    points.Add(new Point3D(x, z, y, rC, gC, bC));
+                }
+            }
+
+            // Ряды стеллажей и штабелей с паллетами/коробками
+            // С ростом pickupFraction коробки верхних ярусов «убираются»
+            int rackRows = 3;
+            int boxesPerRow = 5;
+
+            for (int r = 0; r < rackRows; r++)
+            {
+                float rowY = -7.0f + r * 6.5f;
+
+                for (int b = 0; b < boxesPerRow; b++)
+                {
+                    float boxX = -9.0f + b * 4.0f;
+
+                    // Максимальная высота штабеля 3.0м, уменьшается при разгрузке
+                    float maxStackHeight = 2.8f;
+                    float currentHeight = maxStackHeight * (1.0f - pickupFraction * 0.85f);
+
+                    if (currentHeight > 0.3f)
+                    {
+                        AddSolidBox(points, boxX, rowY, 0.0f, 2.2f, 1.8f, currentHeight,
+                            (byte)(185 + (b * 12) % 40), (byte)(135 + (r * 25) % 50), 75); // Коричнево-картонный цвет
+                    }
+                }
+            }
+        }
+
+        private static void GenerateCraterPoints(List<Point3D> points, float digFraction)
+        {
+            float step = 0.12f;
+            float min = -16.0f, max = 16.0f;
+
+            for (float x = min; x <= max; x += step)
+            {
+                for (float y = min; y <= max; y += step)
+                {
+                    float r = MathF.Sqrt(x * x + y * y);
+                    float z = 3.5f; // Верхний уровень горизонта (нулевая дневная поверхность)
+
+                    // Формирование глубокого котлована с крутыми бортами и террасами
+                    float craterOuterR = 11.0f;
+                    if (r < craterOuterR)
+                    {
+                        // Заглубление котлована вплоть до -4.5 метров
+                        float targetDepth = 7.0f * (0.35f + 0.65f * digFraction);
+                        float shape = MathF.Cos(r * MathF.PI / (craterOuterR * 2.0f));
+                        z -= targetDepth * shape;
+
+                        // Террасирование (уступы карьера/котлована)
+                        z += MathF.Sin(r * 3.5f) * 0.25f;
+                    }
+
+                    byte rC = 90, gC = 80, bC = 70; // Скальная порода
+                    if (r >= craterOuterR)
+                    {
+                        rC = 110; gC = 130; bC = 85; // Травянистая зона вокруг котлована
+                    }
+                    else if (z < 0.0f)
+                    {
+                        rC = 150; gC = 115; bC = 80; // Глубокая глина/песчаник
+                    }
+
+                    points.Add(new Point3D(x, z, y, rC, gC, bC));
+                }
+            }
+        }
+
+        // =========================================================================
+        // ВСПОМОГАТЕЛЬНЫЕ МОДЕЛИ ТЕХНИКИ И ОБОРУДОВАНИЯ
+        // =========================================================================
+
+        private static void AddQuarryMachinery(List<Point3D> points)
+        {
+            // 1. Карьерный тяжелый экскаватор CAT (жёлто-оранжевый корпус, кабина, гусеницы, стрела)
+            AddSolidBox(points, -6.5f, -5.5f, 1.2f, 3.8f, 2.8f, 2.0f, 245, 175, 15); // Корпус
+            AddSolidBox(points, -6.5f, -5.5f, 0.2f, 4.0f, 3.0f, 1.0f, 45, 45, 45);   // Гусеницы
+            AddSolidBox(points, -5.5f, -4.7f, 3.2f, 1.4f, 1.3f, 1.5f, 50, 180, 230); // Кабина остекленная
+
+            // Стрела и ковш экскаватора
+            for (float t = 0; t <= 1.0f; t += 0.05f)
+            {
+                float bx = -4.5f + t * 3.5f;
+                float by = -5.5f + t * 1.5f;
+                float bz = 2.5f + MathF.Sin(t * MathF.PI) * 3.0f;
+                AddSolidBox(points, bx, by, bz, 0.45f, 0.45f, 0.45f, 245, 175, 15);
+            }
+
+            // 2. Карьерный самосвал Белаз / БелАЗ
+            AddSolidBox(points, 7.5f, 6.0f, 1.2f, 4.2f, 2.6f, 1.8f, 220, 140, 20); // Кузов
+            AddSolidBox(points, 9.8f, 6.0f, 1.6f, 1.5f, 2.4f, 1.5f, 240, 230, 220); // Кабина
+            AddSolidBox(points, 7.5f, 6.0f, 0.2f, 4.4f, 2.8f, 1.0f, 30, 30, 30);   // Колёса
+
+            // 3. Бытовой рабочий контейнер / вагончик
+            AddSolidBox(points, -12.0f, 10.0f, 0.0f, 4.5f, 2.4f, 2.4f, 40, 100, 200); // Синий контейнер
+        }
+
+        private static void AddWarehouseMachinery(List<Point3D> points)
+        {
+            // 1. Промышленный вилочный погрузчик (желтый корпус, черная мачта, вилы)
+            float fx = 0.0f, fy = -1.0f;
+            AddSolidBox(points, fx, fy, 0.2f, 1.8f, 1.2f, 1.1f, 255, 190, 0);     // Корпус
+            AddSolidBox(points, fx, fy, 1.3f, 1.1f, 1.0f, 1.3f, 30, 30, 35);      // Каркас кабины
+            AddSolidBox(points, fx + 1.1f, fy, 0.1f, 0.2f, 0.9f, 2.5f, 50, 50, 55); // Мачта
+            AddSolidBox(points, fx + 1.6f, fy, 0.15f, 1.0f, 0.7f, 0.1f, 20, 20, 20); // Вилы
+
+            // 2. Гидравлическая тележка (рохля)
+            AddSolidBox(points, 4.5f, 4.0f, 0.05f, 1.4f, 0.6f, 0.35f, 220, 40, 30);
+            AddSolidBox(points, 3.8f, 4.0f, 0.4f, 0.15f, 0.4f, 0.9f, 30, 30, 30);
+
+            // 3. Сигнальные защитные столбики
+            for (float sy = -8.0f; sy <= 8.0f; sy += 4.0f)
+            {
+                AddSolidBox(points, -12.5f, sy, 0.0f, 0.3f, 0.3f, 1.2f, 240, 220, 20);
+            }
+        }
+
+        private static void AddCraterMachinery(List<Point3D> points)
+        {
+            // Гусеничный буровой станок / экскаватор на краю уступа котлована
+            AddSolidBox(points, -8.5f, 4.5f, 3.6f, 3.5f, 2.4f, 1.8f, 220, 90, 20);
+            AddSolidBox(points, -8.5f, 4.5f, 5.4f, 1.5f, 1.3f, 1.4f, 70, 70, 75);
+            // Буровая мачта
+            AddSolidBox(points, -6.8f, 4.5f, 3.6f, 0.4f, 0.4f, 5.2f, 40, 40, 40);
+
+            // Осветительная мобильная мачта генератора
+            AddSolidBox(points, 9.5f, -7.5f, 3.5f, 1.2f, 1.0f, 0.9f, 240, 240, 240);
+            AddSolidBox(points, 9.5f, -7.5f, 4.4f, 0.15f, 0.15f, 3.8f, 80, 80, 90);
+        }
+
+        private static void AddSolidBox(List<Point3D> points, float cx, float cy, float cz,
+                                        float sizeX, float sizeY, float sizeZ,
+                                        byte r, byte g, byte b)
+        {
+            float step = 0.10f;
+            float hx = sizeX / 2.0f;
+            float hy = sizeY / 2.0f;
+
+            for (float x = cx - hx; x <= cx + hx; x += step)
+            {
+                for (float y = cy - hy; y <= cy + hy; y += step)
+                {
+                    for (float z = cz; z <= cz + sizeZ; z += step)
+                    {
+                        // Заполняем поверхность объекта
+                        bool isEdge = (MathF.Abs(x - (cx - hx)) < step || MathF.Abs(x - (cx + hx)) < step ||
+                                       MathF.Abs(y - (cy - hy)) < step || MathF.Abs(y - (cy + hy)) < step ||
+                                       MathF.Abs(z - cz) < step || MathF.Abs(z - (cz + sizeZ)) < step);
+
+                        if (isEdge)
+                        {
+                            points.Add(new Point3D(x, z, y, r, g, b));
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void WriteLasFile(string lasPath, List<Point3D> points, float driftOffset)
+        {
+            uint totalPoints = (uint)points.Count;
 
             using var fs = new FileStream(lasPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024);
             using var bw = new BinaryWriter(fs);
 
+            // Заголовок LAS 1.2 Format 2
             bw.Write(new byte[] { (byte)'L', (byte)'A', (byte)'S', (byte)'F' });
             bw.Write((ushort)0); bw.Write((ushort)0); bw.Write(new byte[16]);
             bw.Write((byte)1); bw.Write((byte)2); bw.Write(new byte[32]); bw.Write(new byte[32]);
             bw.Write((ushort)0); bw.Write((ushort)2026); bw.Write((ushort)227); bw.Write((uint)227);
             bw.Write((uint)0); bw.Write((byte)2); bw.Write((ushort)26); bw.Write(totalPoints);
-            
-            bw.Write(totalPoints); 
-            bw.Write((uint)0); bw.Write((uint)0); bw.Write((uint)0); bw.Write((uint)0); 
 
-            double scale = 0.001; 
+            bw.Write(totalPoints);
+            bw.Write((uint)0); bw.Write((uint)0); bw.Write((uint)0); bw.Write((uint)0);
+
+            double scale = 0.001;
             bw.Write(scale); bw.Write(scale); bw.Write(scale);
             bw.Write(0.0); bw.Write(0.0); bw.Write(0.0);
-            bw.Write(100.0); bw.Write(-100.0); bw.Write(100.0); bw.Write(-100.0); bw.Write(100.0); bw.Write(-100.0); 
+            bw.Write(200.0); bw.Write(-200.0); bw.Write(200.0); bw.Write(-200.0); bw.Write(200.0); bw.Write(-200.0);
 
-            for (float x = min; x <= max + 1e-4f; x += step)
+            for (int i = 0; i < points.Count; i++)
             {
-                for (float y = min; y <= max + 1e-4f; y += step)
-                {
-                    float rDist = MathF.Sqrt(x * x + y * y);
-                    float baseTerrainZ = (x * 0.08f) + (y * 0.06f); 
-                    float z = baseTerrainZ; 
-                    
-                    if (rDist < 9.0f) z += 4.0f * MathF.Cos(rDist * MathF.PI / 18.0f); 
-                    
-                    float originalZ = z;
+                var pt = points[i];
+                float realX = pt.X + driftOffset;
+                float realY = pt.Z + (driftOffset * 0.4f); // Swap Y/Z для формата
+                float realZ = pt.Y;
 
-                    if (craterRadius > 0)
-                    {
-                        float craterDist = MathF.Sqrt((x - 1.5f) * (x - 1.5f) + (y + 1.0f) * (y + 1.0f));
-                        if (craterDist < craterRadius)
-                        {
-                            float currentDig = digDepthMax * MathF.Cos(craterDist * MathF.PI / (craterRadius * 2.0f));
-                            z -= currentDig;
-                            float minDigZ = baseTerrainZ + 0.3f;
-                            if (z < minDigZ) z = minDigZ; 
-                        }
-                    }
+                bw.Write((int)(realX / scale));
+                bw.Write((int)(realY / scale));
+                bw.Write((int)(realZ / scale));
 
-                    z += (MathF.Sin(x * 3.0f) * MathF.Cos(y * 3.0f)) * 0.15f; 
+                bw.Write((ushort)0); // Интенсивность
+                bw.Write((byte)0);   // Return number & flags
+                bw.Write((byte)0);   // Classification
+                bw.Write((byte)0);   // Scan angle
+                bw.Write((byte)0);   // User data
+                bw.Write((ushort)0); // Point Source ID
 
-                    float finalX = x + driftOffset;
-                    float finalY = y + (driftOffset * 0.3f);
-                    float finalZ = z;
-
-                    bw.Write((int)(finalX / scale)); bw.Write((int)(finalY / scale)); bw.Write((int)(finalZ / scale));
-                    bw.Write((ushort)0); bw.Write((byte)0); bw.Write((byte)0); bw.Write((byte)0); bw.Write((byte)0); bw.Write((ushort)0); 
-                    
-                    ushort colorR = 100, colorG = 90, colorB = 80; 
-                    if (rDist < 9.0f)
-                    {
-                        if (craterRadius > 0 && z < originalZ - 0.2f) { colorR = 140; colorG = 100; colorB = 70; }
-                        else { colorR = 190; colorG = 170; colorB = 120; }
-                    }
-
-                    bw.Write((ushort)(colorR << 8)); bw.Write((ushort)(colorG << 8)); bw.Write((ushort)(colorB << 8));
-                }
+                bw.Write((ushort)(pt.R << 8));
+                bw.Write((ushort)(pt.G << 8));
+                bw.Write((ushort)(pt.B << 8));
             }
         }
 
@@ -295,6 +627,9 @@ namespace LidarRunner
                 listener.Start();
                 try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
 
+                Console.WriteLine($"\n[СЕРВЕР] Веб-визуализатор запущен по адресу: {url}");
+                Console.WriteLine("Нажмите любую клавишу для остановки сервера...");
+
                 bool isRunning = true;
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
@@ -306,18 +641,23 @@ namespace LidarRunner
                             string localPath = ctx.Request.Url?.LocalPath.TrimStart('/') ?? string.Empty;
                             if (string.IsNullOrEmpty(localPath)) localPath = "viewer.html";
 
+                            string fullPath = Path.Combine(workDirectory, localPath);
+
                             ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                            if (File.Exists(localPath))
+                            if (File.Exists(fullPath))
                             {
-                                byte[] buf = File.ReadAllBytes(localPath);
-                                if (localPath.EndsWith(".html")) ctx.Response.ContentType = "text/html; charset=utf-8";
-                                else if (localPath.EndsWith(".json")) ctx.Response.ContentType = "application/json; charset=utf-8";
+                                byte[] buf = File.ReadAllBytes(fullPath);
+                                if (fullPath.EndsWith(".html")) ctx.Response.ContentType = "text/html; charset=utf-8";
+                                else if (fullPath.EndsWith(".json")) ctx.Response.ContentType = "application/json; charset=utf-8";
                                 else ctx.Response.ContentType = "application/octet-stream";
 
                                 ctx.Response.ContentLength64 = buf.Length;
                                 ctx.Response.OutputStream.Write(buf, 0, buf.Length);
                             }
-                            else ctx.Response.StatusCode = 404;
+                            else
+                            {
+                                ctx.Response.StatusCode = 404;
+                            }
                             ctx.Response.OutputStream.Close();
                         }
                         catch { }
@@ -330,7 +670,7 @@ namespace LidarRunner
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ОШИБКА] {ex.Message}");
+                Console.WriteLine($"[ОШИБКА СЕРВЕРА] {ex.Message}");
             }
         }
     }
