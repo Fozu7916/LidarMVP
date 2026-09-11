@@ -53,12 +53,17 @@ namespace LidarProcessorMVP
         public readonly byte G;
         public readonly byte B;
         public readonly byte Classification;
+        public readonly byte ReturnInfo; // Биты 0-3: Return Number, Биты 4-7: Number of Returns (Спецификация DJI L2)
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public Point3D(float x, float y, float z, byte r, byte g, byte b, byte classification = 1)
+        public Point3D(float x, float y, float z, byte r, byte g, byte b, byte classification = 1, byte returnInfo = 0x11)
         {
-            X = x; Y = y; Z = z; R = r; G = g; B = b; Classification = classification;
+            X = x; Y = y; Z = z; R = r; G = g; B = b; Classification = classification; ReturnInfo = returnInfo;
         }
+
+        public byte ReturnNumber => (byte)(ReturnInfo & 0x0F);
+        public byte NumberOfReturns => (byte)((ReturnInfo >> 4) & 0x0F);
+        public bool IsLastReturn => ReturnNumber >= NumberOfReturns;
     }
 
     public class OctreeNodeMetadata
@@ -119,7 +124,6 @@ namespace LidarProcessorMVP
             double offsetY = br.ReadDouble();
             double offsetZ = br.ReadDouble();
 
-            // Чтение точных пространственных границ сцены
             fs.Seek(179, SeekOrigin.Begin);
             double maxX = br.ReadDouble();
             double minX = br.ReadDouble();
@@ -135,7 +139,6 @@ namespace LidarProcessorMVP
                 totalPoints = (long)br.ReadUInt64();
             }
 
-            // Фиксация Origin строго по центру габаритов полигона
             if (!CurrentProject.IsInitialized)
             {
                 CurrentProject.OriginX = (minX + maxX) * 0.5;
@@ -153,13 +156,18 @@ namespace LidarProcessorMVP
             fs.Seek(offsetToPoints, SeekOrigin.Begin);
 
             byte[] recordBuffer = new byte[pointRecordLength];
+
+            // Настройка смещений для стандартов LAS 1.2-1.4 (DJI Zenmuse L2 нативно пишет формат 6-8)
             int classOffset = 15;
+            int returnByteOffset = 14;
             int rgbOffset = -1;
 
-            if (pointFormat == 2) { rgbOffset = 20; classOffset = 15; }
-            else if (pointFormat == 3) { rgbOffset = 28; classOffset = 15; }
+            if (pointFormat == 2) { rgbOffset = 20; classOffset = 15; returnByteOffset = 14; }
+            else if (pointFormat == 3) { rgbOffset = 28; classOffset = 15; returnByteOffset = 14; }
             else if (pointFormat >= 6 && pointFormat <= 10)
             {
+                // LAS 1.4: 6-10 форматы точки
+                returnByteOffset = 14;
                 classOffset = 16;
                 if (pointFormat == 7 || pointFormat == 8 || pointFormat == 10) rgbOffset = 30;
             }
@@ -188,6 +196,12 @@ namespace LidarProcessorMVP
                     if (pointFormat < 6) classification = (byte)(classification & 0x1F);
                 }
 
+                byte returnInfo = 0x11;
+                if (returnByteOffset < pointRecordLength)
+                {
+                    returnInfo = recordBuffer[returnByteOffset];
+                }
+
                 byte r = 200, g = 200, b = 200;
                 if (rgbOffset > 0 && rgbOffset + 6 <= pointRecordLength)
                 {
@@ -199,8 +213,7 @@ namespace LidarProcessorMVP
                     b = (byte)(rawB >> 8);
                 }
 
-                // X: вправо, Y: высота (Z файла), Z: горизонталь вперед (Y файла)
-                points.Add(new Point3D(localX, localZ, localY, r, g, b, classification));
+                points.Add(new Point3D(localX, localZ, localY, r, g, b, classification, returnInfo));
             }
 
             return points;
@@ -345,7 +358,7 @@ namespace LidarProcessorMVP
             }
         }
 
-        public static OctreeMetadata BuildAndExportOctreeLOD(List<Point3D> points, string outputDir, string epochPrefix, int maxPointsPerNode = 40000)
+        public static OctreeMetadata BuildAndExportOctreeLOD(List<Point3D> points, string outputDir, string epochPrefix, int maxPointsPerNode = 50000)
         {
             var meta = new OctreeMetadata();
             if (points == null || points.Count == 0) return meta;

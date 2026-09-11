@@ -84,11 +84,7 @@ namespace LidarProcessorMVP
 
     public static class MathApparatus
     {
-        // =====================================================================
-        // 1. АВТОМАТИЧЕСКАЯ ФИЛЬТРАЦИЯ РЕЛЬЕФА (PMF / CSF АНАЛОГ ДЛЯ КАРЬЕРА)
-        // =====================================================================
-
-        public static List<Point3D> ClassifyGroundAndObjects(List<Point3D> points, float gridCellSize = 0.5f, float heightThreshold = 0.35f)
+        public static List<Point3D> ClassifyGroundAndObjects(List<Point3D> points, float gridCellSize = 0.45f, float heightThreshold = 0.25f)
         {
             if (points == null || points.Count == 0) return new List<Point3D>();
 
@@ -98,10 +94,8 @@ namespace LidarProcessorMVP
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-                if (pt.X < minX) minX = pt.X;
-                if (pt.X > maxX) maxX = pt.X;
-                if (pt.Z < minZ) minZ = pt.Z;
-                if (pt.Z > maxZ) maxZ = pt.Z;
+                if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X;
+                if (pt.Z < minZ) minZ = pt.Z; if (pt.Z > maxZ) maxZ = pt.Z;
             }
 
             int cols = (int)MathF.Ceiling((maxX - minX) / gridCellSize) + 1;
@@ -155,14 +149,14 @@ namespace LidarProcessorMVP
                 }
             }
 
-            var classified = new List<Point3D>(points.Count);
+            byte[] pointClasses = new byte[points.Count];
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
                 int c = (int)((pt.X - minX) / gridCellSize);
                 int r = (int)((pt.Z - minZ) / gridCellSize);
 
-                byte cls = 2; // Ground
+                byte cls = 2;
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
@@ -171,26 +165,66 @@ namespace LidarProcessorMVP
                     {
                         if (pt.Y - groundY > heightThreshold)
                         {
-                            cls = 64; // Техника / объект
+                            cls = 64;
                         }
                     }
                 }
+                pointClasses[i] = cls;
+            }
 
-                classified.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls));
+            bool[] machineryFootprint = new bool[totalCells];
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (pointClasses[i] == 64)
+                {
+                    int c = (int)((points[i].X - minX) / gridCellSize);
+                    int r = (int)((points[i].Z - minZ) / gridCellSize);
+                    if (c >= 0 && c < cols && r >= 0 && r < rows)
+                    {
+                        for (int dr = -1; dr <= 1; dr++)
+                        {
+                            for (int dc = -1; dc <= 1; dc++)
+                            {
+                                int nr = r + dr;
+                                int nc = c + dc;
+                                if (nc >= 0 && nc < cols && nr >= 0 && nr < rows)
+                                {
+                                    machineryFootprint[nr * cols + nc] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            var classified = new List<Point3D>(points.Count);
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                int c = (int)((pt.X - minX) / gridCellSize);
+                int r = (int)((pt.Z - minZ) / gridCellSize);
+
+                byte cls = pointClasses[i];
+
+                if (c >= 0 && c < cols && r >= 0 && r < rows && machineryFootprint[r * cols + c])
+                {
+                    bool isMachineryColor = (pt.R > 180 && pt.G > 80 && pt.B < 70) || (pt.R < 60 && pt.G < 60 && pt.B < 60);
+                    if (isMachineryColor || cls == 64)
+                    {
+                        cls = 64;
+                    }
+                }
+
+                classified.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls, pt.ReturnInfo));
             }
 
             return classified;
         }
 
-        // =====================================================================
-        // 2. ГЕОМЕТРИЧЕСКАЯ СЕГМЕНТАЦИЯ СКЛАДА (КОРОБКИ VS ПОГРУЗЧИКИ)
-        // =====================================================================
-
         public static List<Point3D> FilterWarehouseMachinery(List<Point3D> points, float floorElevation = 0.08f)
         {
             if (points == null || points.Count == 0) return new List<Point3D>();
 
-            // Шаг 1: Разделение на точки пола и надземные объекты
             var floorPoints = new List<Point3D>(points.Count / 3);
             var objectPoints = new List<Point3D>(points.Count);
 
@@ -199,7 +233,7 @@ namespace LidarProcessorMVP
                 var pt = points[i];
                 if (pt.Y <= floorElevation)
                 {
-                    floorPoints.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 2)); // Класс 2: Пол
+                    floorPoints.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 2, pt.ReturnInfo));
                 }
                 else
                 {
@@ -207,7 +241,6 @@ namespace LidarProcessorMVP
                 }
             }
 
-            // Шаг 2: Пространственная 3D-кластеризация через Spatial Grid Hash
             float clusterCell = 0.45f;
             float invCell = 1.0f / clusterCell;
             var gridMap = new Dictionary<long, List<int>>(objectPoints.Count / 4);
@@ -215,10 +248,10 @@ namespace LidarProcessorMVP
             for (int i = 0; i < objectPoints.Count; i++)
             {
                 var pt = objectPoints[i];
-                int gx = (int)MathF.Floor(pt.X * invCell);
-                int gy = (int)MathF.Floor(pt.Y * invCell);
-                int gz = (int)MathF.Floor(pt.Z * invCell);
-                long key = ((long)(gx & 0x1FFFFF) << 42) | ((long)(gy & 0x1FFFFF) << 21) | (gz & 0x1FFFFF);
+                long gx = (long)MathF.Floor(pt.X * invCell);
+                long gy = (long)MathF.Floor(pt.Y * invCell);
+                long gz = (long)MathF.Floor(pt.Z * invCell);
+                long key = ((gx & 0x1FFFFFL) << 42) | ((gy & 0x1FFFFFL) << 21) | (gz & 0x1FFFFFL);
 
                 if (!gridMap.TryGetValue(key, out var list))
                 {
@@ -228,7 +261,6 @@ namespace LidarProcessorMVP
                 list.Add(i);
             }
 
-            // Связывание компонентов (Flood Fill / BFS)
             int[] clusterLabels = new int[objectPoints.Count];
             Array.Fill(clusterLabels, -1);
             int currentClusterId = 0;
@@ -246,20 +278,19 @@ namespace LidarProcessorMVP
                 {
                     int currIdx = queue.Dequeue();
                     var pt = objectPoints[currIdx];
-                    int gx = (int)MathF.Floor(pt.X * invCell);
-                    int gy = (int)MathF.Floor(pt.Y * invCell);
-                    int gz = (int)MathF.Floor(pt.Z * invCell);
+                    long gx = (long)MathF.Floor(pt.X * invCell);
+                    long gy = (long)MathF.Floor(pt.Y * invCell);
+                    long gz = (long)MathF.Floor(pt.Z * invCell);
 
-                    // Проверка 27 соседних вокселей
                     for (int dx = -1; dx <= 1; dx++)
                     {
                         for (int dy = -1; dy <= 1; dy++)
                         {
                             for (int dz = -1; dz <= 1; dz++)
                             {
-                                long neighborKey = ((long)((gx + dx) & 0x1FFFFF) << 42) |
-                                                   ((long)((gy + dy) & 0x1FFFFF) << 21) |
-                                                   ((gz + dz) & 0x1FFFFF);
+                                long neighborKey = (((gx + dx) & 0x1FFFFFL) << 42) |
+                                                   (((gy + dy) & 0x1FFFFFL) << 21) |
+                                                   ((gz + dz) & 0x1FFFFFL);
 
                                 if (gridMap.TryGetValue(neighborKey, out var neighborIndices))
                                 {
@@ -280,11 +311,10 @@ namespace LidarProcessorMVP
                 currentClusterId++;
             }
 
-            // Шаг 3: Геометрический анализ кластеров (Solidity & Vertical Profile)
             var clusterMin = new Vector3[currentClusterId];
             var clusterMax = new Vector3[currentClusterId];
             var clusterCounts = new int[currentClusterId];
-            var clusterMidHeightPoints = new int[currentClusterId]; // Срез 0.8м - 1.8м (кабина)
+            var clusterMidHeightPoints = new int[currentClusterId];
 
             for (int c = 0; c < currentClusterId; c++)
             {
@@ -308,7 +338,6 @@ namespace LidarProcessorMVP
                 }
             }
 
-            // Классификация кластеров: техника или коробки
             bool[] isMachineryCluster = new bool[currentClusterId];
 
             for (int c = 0; c < currentClusterId; c++)
@@ -318,14 +347,8 @@ namespace LidarProcessorMVP
                 var size = clusterMax[c] - clusterMin[c];
                 float boundingVolume = Math.Max(0.01f, size.X * size.Y * size.Z);
                 float density = clusterCounts[c] / boundingVolume;
-
-                // Доля точек на высоте кабины относительно общей высоты
                 float midRatio = (float)clusterMidHeightPoints[c] / clusterCounts[c];
 
-                // Признаки погрузчика/техники:
-                // 1. Полая кабина (низкая доля точек в среднем ярусе при высоте > 2.0м)
-                // 2. Высокая узкая мачта с выносом вперед
-                // 3. Низкий коэффициент заполнения Bounding Box (Solidity)
                 bool isHollowCabin = (size.Y > 1.8f && midRatio < 0.28f);
                 bool hasMachineryAspect = (size.X > 1.2f && size.Z > 1.0f && density < 450.0f);
 
@@ -335,7 +358,6 @@ namespace LidarProcessorMVP
                 }
             }
 
-            // Шаг 4: Сборка результирующего классифицированного облака
             var result = new List<Point3D>(points.Count);
             result.AddRange(floorPoints);
 
@@ -344,21 +366,17 @@ namespace LidarProcessorMVP
                 var pt = objectPoints[i];
                 int c = clusterLabels[i];
 
-                byte cls = 1; // Коробка / Складской груз
+                byte cls = 1;
                 if (c >= 0 && isMachineryCluster[c])
                 {
-                    cls = 64; // Техника (Погрузчик)
+                    cls = 64;
                 }
 
-                result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls));
+                result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls, pt.ReturnInfo));
             }
 
             return result;
         }
-
-        // =====================================================================
-        // 3. МАРКШЕЙДЕРСКИЙ РАСЧЕТ CUT & FILL
-        // =====================================================================
 
         public static VolumeBalance CalculateVolumeBalance(List<Point3D> baseCloud, List<Point3D> currentCloud,
                                                            float cellSize, BoundaryPolygon? aoi = null, bool filterMachinery = true, string? exportGridCsv = null)
@@ -453,7 +471,7 @@ namespace LidarProcessorMVP
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-                if (filterMachinery && pt.Classification == 64) continue; // Отсекаем технику из высотной модели
+                if (filterMachinery && pt.Classification == 64) continue;
 
                 int c = (int)((pt.X - minX) / cellSize);
                 int r = (int)((pt.Z - minZ) / cellSize);
