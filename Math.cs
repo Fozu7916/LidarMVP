@@ -1,34 +1,218 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
+using System.Text.Json;
 using MathNet.Numerics.LinearAlgebra.Single;
 
 namespace LidarProcessorMVP
 {
     public readonly struct VolumeBalance
     {
-        public readonly double CutVolume;   // Выемка (извлечено породы / снято коробок)
-        public readonly double FillVolume;  // Насыпь (добавлено грунта / складировано)
-        public readonly double NetVolume;   // Баланс (Cut - Fill)
+        public readonly double CutVolume;
+        public readonly double FillVolume;
+        public readonly double NetVolume;
+        public readonly double AreaCut;
+        public readonly double AreaFill;
+        public readonly double MaxDepth;
 
-        public VolumeBalance(double cut, double fill)
+        public VolumeBalance(double cut, double fill, double areaCut, double areaFill, double maxDepth)
         {
             CutVolume = cut;
             FillVolume = fill;
             NetVolume = cut - fill;
+            AreaCut = areaCut;
+            AreaFill = areaFill;
+            MaxDepth = maxDepth;
+        }
+    }
+
+    public class BoundaryPolygon
+    {
+        public List<Vector2> Vertices { get; set; } = new List<Vector2>();
+
+        public bool IsPointInside(float x, float z)
+        {
+            if (Vertices == null || Vertices.Count < 3) return true;
+
+            bool inside = false;
+            int j = Vertices.Count - 1;
+
+            for (int i = 0; i < Vertices.Count; i++)
+            {
+                var vi = Vertices[i];
+                var vj = Vertices[j];
+
+                if (((vi.Y > z) != (vj.Y > z)) &&
+                    (x < (vj.X - vi.X) * (z - vi.Y) / (vj.Y - vi.Y) + vi.X))
+                {
+                    inside = !inside;
+                }
+                j = i;
+            }
+
+            return inside;
+        }
+
+        public static BoundaryPolygon LoadOrCreateDefault(string dir, float defaultRadius = 11.5f)
+        {
+            string path = Path.Combine(dir, "boundary.json");
+            if (File.Exists(path))
+            {
+                try
+                {
+                    string json = File.ReadAllText(path);
+                    var poly = JsonSerializer.Deserialize<BoundaryPolygon>(json);
+                    if (poly != null && poly.Vertices.Count >= 3) return poly;
+                }
+                catch { }
+            }
+
+            var defaultPoly = new BoundaryPolygon();
+            int segments = 12;
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = i * MathF.PI * 2.0f / segments;
+                defaultPoly.Vertices.Add(new Vector2(MathF.Cos(angle) * defaultRadius, MathF.Sin(angle) * defaultRadius));
+            }
+
+            string outJson = JsonSerializer.Serialize(defaultPoly, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, outJson);
+            return defaultPoly;
         }
     }
 
     public static class MathApparatus
     {
-        // =====================================================================
-        // 1. ПРОМЫШЛЕННЫЙ МАРКШЕЙДЕРСКИЙ РАСЧЕТ CUT & FILL (2.5D DEM)
-        // =====================================================================
+        public static List<Point3D> ClassifyGroundAndObjects(List<Point3D> points, float gridCellSize = 0.5f, float heightThreshold = 0.35f)
+        {
+            if (points == null || points.Count == 0) return new List<Point3D>();
 
-        public static VolumeBalance CalculateVolumeBalance(List<Point3D> baseCloud, List<Point3D> currentCloud, float cellSize, bool onlyGround = false)
+            float minX = float.MaxValue, minZ = float.MaxValue;
+            float maxX = float.MinValue, maxZ = float.MinValue;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                if (pt.X < minX) minX = pt.X;
+                if (pt.X > maxX) maxX = pt.X;
+                if (pt.Z < minZ) minZ = pt.Z;
+                if (pt.Z > maxZ) maxZ = pt.Z;
+            }
+
+            int cols = (int)MathF.Ceiling((maxX - minX) / gridCellSize) + 1;
+            int rows = (int)MathF.Ceiling((maxZ - minZ) / gridCellSize) + 1;
+            int totalCells = cols * rows;
+
+            float[] minElevationGrid = new float[totalCells];
+            Array.Fill(minElevationGrid, float.MaxValue);
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                int c = (int)((pt.X - minX) / gridCellSize);
+                int r = (int)((pt.Z - minZ) / gridCellSize);
+                if (c >= 0 && c < cols && r >= 0 && r < rows)
+                {
+                    int idx = r * cols + c;
+                    if (pt.Y < minElevationGrid[idx])
+                    {
+                        minElevationGrid[idx] = pt.Y;
+                    }
+                }
+            }
+
+            float[] smoothedGround = new float[totalCells];
+            Array.Copy(minElevationGrid, smoothedGround, totalCells);
+
+            for (int r = 1; r < rows - 1; r++)
+            {
+                for (int c = 1; c < cols - 1; c++)
+                {
+                    int idx = r * cols + c;
+                    if (minElevationGrid[idx] < float.MaxValue - 100f)
+                    {
+                        float sum = 0;
+                        int count = 0;
+                        for (int dr = -1; dr <= 1; dr++)
+                        {
+                            for (int dc = -1; dc <= 1; dc++)
+                            {
+                                float val = minElevationGrid[(r + dr) * cols + (c + dc)];
+                                if (val < float.MaxValue - 100f)
+                                {
+                                    sum += val;
+                                    count++;
+                                }
+                            }
+                        }
+                        smoothedGround[idx] = sum / count;
+                    }
+                }
+            }
+
+            var classified = new List<Point3D>(points.Count);
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                int c = (int)((pt.X - minX) / gridCellSize);
+                int r = (int)((pt.Z - minZ) / gridCellSize);
+
+                byte cls = 2; // Ground
+                if (c >= 0 && c < cols && r >= 0 && r < rows)
+                {
+                    int idx = r * cols + c;
+                    float groundY = smoothedGround[idx];
+                    if (groundY < float.MaxValue - 100f)
+                    {
+                        if (pt.Y - groundY > heightThreshold)
+                        {
+                            cls = 64; // Техника / объект
+                        }
+                    }
+                }
+
+                classified.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls));
+            }
+
+            return classified;
+        }
+
+        public static List<Point3D> FilterWarehouseMachinery(List<Point3D> points, float floorElevation = 0.05f)
+        {
+            var result = new List<Point3D>(points.Count);
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+
+                if (pt.Y <= floorElevation)
+                {
+                    result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 2));
+                    continue;
+                }
+
+                bool isForkliftColor = (pt.R > 230 && pt.G > 160 && pt.B < 50);
+                bool isCabinFrame = (pt.R < 60 && pt.G < 60 && pt.B < 60 && pt.Y > 1.2f && pt.Y < 2.5f);
+
+                if (isForkliftColor || isCabinFrame)
+                {
+                    result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 64));
+                }
+                else
+                {
+                    result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 1));
+                }
+            }
+
+            return result;
+        }
+
+        public static VolumeBalance CalculateVolumeBalance(List<Point3D> baseCloud, List<Point3D> currentCloud,
+                                                           float cellSize, BoundaryPolygon? aoi = null, bool filterMachinery = true, string? exportGridCsv = null)
         {
             if (baseCloud == null || currentCloud == null || baseCloud.Count == 0 || currentCloud.Count == 0)
-                return new VolumeBalance(0, 0);
+                return new VolumeBalance(0, 0, 0, 0, 0);
 
             float minX = float.MaxValue, minZ = float.MaxValue;
             float maxX = float.MinValue, maxZ = float.MinValue;
@@ -51,43 +235,64 @@ namespace LidarProcessorMVP
             int cols = (int)MathF.Ceiling((maxX - minX) / cellSize) + 1;
             int rows = (int)MathF.Ceiling((maxZ - minZ) / cellSize) + 1;
 
-            float[] baseGrid = BuildRobustDEM(baseCloud, cellSize, minX, minZ, cols, rows, onlyGround);
-            float[] currentGrid = BuildRobustDEM(currentCloud, cellSize, minX, minZ, cols, rows, onlyGround);
+            float[] baseGrid = BuildRobustDEM(baseCloud, cellSize, minX, minZ, cols, rows, filterMachinery);
+            float[] currentGrid = BuildRobustDEM(currentCloud, cellSize, minX, minZ, cols, rows, filterMachinery);
 
-            // Закрытие пробелов и теневых зон (IDW/Nearest Neighbor Interpolation)
             InterpolateHoles(baseGrid, cols, rows);
             InterpolateHoles(currentGrid, cols, rows);
 
             double totalCut = 0.0;
             double totalFill = 0.0;
+            double areaCut = 0.0;
+            double areaFill = 0.0;
+            double maxDepth = 0.0;
             double cellArea = cellSize * cellSize;
-            int totalCells = cols * rows;
 
-            for (int i = 0; i < totalCells; i++)
+            for (int r = 0; r < rows; r++)
             {
-                float bH = baseGrid[i];
-                float cH = currentGrid[i];
+                float cellCenterZ = minZ + (r + 0.5f) * cellSize;
 
-                if (bH > -9999.0f && cH > -9999.0f)
+                for (int c = 0; c < cols; c++)
                 {
-                    float diff = bH - cH;
+                    float cellCenterX = minX + (c + 0.5f) * cellSize;
 
-                    // Зона нечувствительности к инструментальному шуму лидара (±3 см)
-                    if (diff > 0.03f)
+                    if (aoi != null && !aoi.IsPointInside(cellCenterX, cellCenterZ))
                     {
-                        totalCut += diff * cellArea;
+                        continue;
                     }
-                    else if (diff < -0.03f)
+
+                    int idx = r * cols + c;
+                    float bH = baseGrid[idx];
+                    float cH = currentGrid[idx];
+
+                    if (bH > -9999.0f && cH > -9999.0f)
                     {
-                        totalFill += Math.Abs(diff) * cellArea;
+                        float diff = bH - cH;
+
+                        if (diff > 0.03f)
+                        {
+                            totalCut += diff * cellArea;
+                            areaCut += cellArea;
+                            if (diff > maxDepth) maxDepth = diff;
+                        }
+                        else if (diff < -0.03f)
+                        {
+                            totalFill += Math.Abs(diff) * cellArea;
+                            areaFill += cellArea;
+                        }
                     }
                 }
             }
 
-            return new VolumeBalance(totalCut, totalFill);
+            if (!string.IsNullOrEmpty(exportGridCsv))
+            {
+                ReportGenerator.ExportVolumeGridCsv(exportGridCsv, baseGrid, currentGrid, minX, minZ, cellSize, cols, rows);
+            }
+
+            return new VolumeBalance(totalCut, totalFill, areaCut, areaFill, maxDepth);
         }
 
-        private static float[] BuildRobustDEM(List<Point3D> points, float cellSize, float minX, float minZ, int cols, int rows, bool onlyGround)
+        private static float[] BuildRobustDEM(List<Point3D> points, float cellSize, float minX, float minZ, int cols, int rows, bool filterMachinery)
         {
             int totalCells = cols * rows;
             float[] grid = new float[totalCells];
@@ -96,9 +301,7 @@ namespace LidarProcessorMVP
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-
-                // Если включен фильтр грунта, обрабатываем только ASPRS класс 2 (Ground)
-                if (onlyGround && pt.Classification != 2) continue;
+                if (filterMachinery && pt.Classification == 64) continue;
 
                 int c = (int)((pt.X - minX) / cellSize);
                 int r = (int)((pt.Z - minZ) / cellSize);
@@ -106,7 +309,6 @@ namespace LidarProcessorMVP
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
-                    // Для грунта берём минимальные точки или устойчивый максимум поверхности
                     if (pt.Y > grid[idx])
                     {
                         grid[idx] = pt.Y;
@@ -129,7 +331,6 @@ namespace LidarProcessorMVP
                         float sum = 0;
                         int count = 0;
 
-                        // Сбор 4-связных соседей
                         float left = grid[idx - 1];
                         float right = grid[idx + 1];
                         float top = grid[idx - cols];
@@ -148,10 +349,6 @@ namespace LidarProcessorMVP
                 }
             }
         }
-
-        // =====================================================================
-        // 2. ICP ВЫРАВНИВАНИЕ
-        // =====================================================================
 
         public static (Matrix4x4 Transform, float Error) AlignCloudsICP(List<Vector3> source, List<Vector3> target, int maxIterations = 8)
         {
