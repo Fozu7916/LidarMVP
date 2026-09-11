@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -17,7 +16,9 @@ namespace LidarProcessorMVP
         public double OriginY { get; set; } = 0.0;
         public double OriginZ { get; set; } = 0.0;
         public bool IsInitialized { get; set; } = false;
-        public string CoordinateSystemInfo { get; set; } = "Local Geocentric Center";
+        public string CoordinateSystemInfo { get; set; } = "МСК / WGS-84 UTM (Local Shifted Origin)";
+        public float MaterialDensity { get; set; } = 1.65f; // Плотность грунта/песка т/м3
+        public float BulkingFactor { get; set; } = 1.20f;   // Коэффициент разрыхления породы (Кр)
 
         public static ProjectConfig LoadOrCreate(string directory)
         {
@@ -46,14 +47,14 @@ namespace LidarProcessorMVP
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public readonly struct Point3D
     {
-        public readonly float X;
-        public readonly float Y;
-        public readonly float Z;
+        public readonly float X; // Easting (м)
+        public readonly float Y; // Northing (м)
+        public readonly float Z; // Elevation (Высота над уровнем моря, м)
         public readonly byte R;
         public readonly byte G;
         public readonly byte B;
-        public readonly byte Classification;
-        public readonly byte ReturnInfo; // Биты 0-3: Return Number, Биты 4-7: Number of Returns (Спецификация DJI L2)
+        public readonly byte Classification; // ASPRS: 2-Ground, 1-Unclassified, 64-Machinery
+        public readonly byte ReturnInfo;     // Биты 0-3: Return Number, 4-7: Total Returns
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Point3D(float x, float y, float z, byte r, byte g, byte b, byte classification = 1, byte returnInfo = 0x11)
@@ -101,7 +102,7 @@ namespace LidarProcessorMVP
 
         public static List<Point3D> FastLoadLasFile(string path, string projectDir)
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 2 * 1024 * 1024);
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4 * 1024 * 1024);
             using var br = new BinaryReader(fs);
 
             byte[] signature = br.ReadBytes(4);
@@ -139,6 +140,7 @@ namespace LidarProcessorMVP
                 totalPoints = (long)br.ReadUInt64();
             }
 
+            // Фиксация единого опорного геодезического базиса для всех эпох мониторинга
             if (!CurrentProject.IsInitialized)
             {
                 CurrentProject.OriginX = (minX + maxX) * 0.5;
@@ -152,12 +154,12 @@ namespace LidarProcessorMVP
             double originY = CurrentProject.OriginY;
             double originZ = CurrentProject.OriginZ;
 
-            var points = new List<Point3D>((int)Math.Min(totalPoints, 10_000_000));
+            var points = new List<Point3D>((int)Math.Min(totalPoints, 15_000_000));
             fs.Seek(offsetToPoints, SeekOrigin.Begin);
 
             byte[] recordBuffer = new byte[pointRecordLength];
 
-            // Настройка смещений для стандартов LAS 1.2-1.4 (DJI Zenmuse L2 нативно пишет формат 6-8)
+            // Настройка смещений полей LAS 1.2 - LAS 1.4 (Zenmuse L2 использует форматы 6, 7, 8)
             int classOffset = 15;
             int returnByteOffset = 14;
             int rgbOffset = -1;
@@ -166,7 +168,6 @@ namespace LidarProcessorMVP
             else if (pointFormat == 3) { rgbOffset = 28; classOffset = 15; returnByteOffset = 14; }
             else if (pointFormat >= 6 && pointFormat <= 10)
             {
-                // LAS 1.4: 6-10 форматы точки
                 returnByteOffset = 14;
                 classOffset = 16;
                 if (pointFormat == 7 || pointFormat == 8 || pointFormat == 10) rgbOffset = 30;
@@ -185,6 +186,7 @@ namespace LidarProcessorMVP
                 double realY = (rawY * scaleY) + offsetY;
                 double realZ = (rawZ * scaleZ) + offsetZ;
 
+                // Сохранение строгой ориентации геодезических осей: X - Восток, Y - Север, Z - Высота
                 float localX = (float)(realX - originX);
                 float localY = (float)(realY - originY);
                 float localZ = (float)(realZ - originZ);
@@ -213,7 +215,7 @@ namespace LidarProcessorMVP
                     b = (byte)(rawB >> 8);
                 }
 
-                points.Add(new Point3D(localX, localZ, localY, r, g, b, classification, returnInfo));
+                points.Add(new Point3D(localX, localY, localZ, r, g, b, classification, returnInfo));
             }
 
             return points;
@@ -334,7 +336,7 @@ namespace LidarProcessorMVP
         {
             const int ChunkSize = 65536;
             byte[] buffer = new byte[ChunkSize * 16];
-            using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024);
+            using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, 2 * 1024 * 1024);
             int idx = 0;
 
             while (idx < points.Count)
@@ -358,7 +360,7 @@ namespace LidarProcessorMVP
             }
         }
 
-        public static OctreeMetadata BuildAndExportOctreeLOD(List<Point3D> points, string outputDir, string epochPrefix, int maxPointsPerNode = 50000)
+        public static OctreeMetadata BuildAndExportOctreeLOD(List<Point3D> points, string outputDir, string epochPrefix, int maxPointsPerNode = 60000)
         {
             var meta = new OctreeMetadata();
             if (points == null || points.Count == 0) return meta;

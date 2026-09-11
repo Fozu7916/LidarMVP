@@ -14,16 +14,16 @@ namespace LidarRunner
 {
     public enum SceneType
     {
-        Quarry,
-        Warehouse,
-        Crater
+        Quarry,    // Карьерная выемка / отсыпка песка
+        Warehouse, // Штабеля и открытые склады МТР
+        Crater     // Котлован под компрессорную станцию
     }
 
     class Program
     {
         private static string workDirectory = Directory.GetCurrentDirectory();
         private static float voxelStep = 0.08f;
-        private static SceneType selectedScene = SceneType.Crater;
+        private static SceneType selectedScene = SceneType.Quarry;
 
         static void Main(string[] args)
         {
@@ -34,32 +34,32 @@ namespace LidarRunner
 
                 Console.Clear();
                 Console.WriteLine("==========================================================");
-                Console.WriteLine("   ЛИДАР-БИМ: DJI MATRICE 350 RTK + ZENMUSE L2 МОНИТОРИНГ ");
+                Console.WriteLine("   ГАЗПРОМ-АУДИТ: БПЛА-ЛИДАР МОНИТОРИНГ СТРОИТЕЛЬСТВА     ");
                 Console.WriteLine("==========================================================");
                 Console.WriteLine($" [ Каталог      ]: {workDirectory}");
-                Console.WriteLine($" [ Гео-базис СК ]: {(proj.IsInitialized ? $"X: {proj.OriginX:F3}, Y: {proj.OriginY:F3}, Z: {proj.OriginZ:F3}" : "Центрируется по габаритам сцены")}");
-                Console.WriteLine($" [ Шаг вокселя  ]: {voxelStep:F3} м");
-                Console.WriteLine($" [ Текущая сцена]: {selectedScene}");
+                Console.WriteLine($" [ Базис СК     ]: {(proj.IsInitialized ? $"X: {proj.OriginX:F2}, Y: {proj.OriginY:F2}, Z: {proj.OriginZ:F2}" : "Фиксируется по первому скану")}");
+                Console.WriteLine($" [ Воксель / DEM]: {voxelStep:F3} м / {Math.Max(0.10f, voxelStep * 1.5f):F2} м");
+                Console.WriteLine($" [ Тип объекта  ]: {selectedScene}");
+                Console.WriteLine($" [ Плотность /Кр]: {proj.MaterialDensity:F2} т/м³ | Кр = {proj.BulkingFactor:F2}");
 
                 if (files.Count > 0)
                 {
-                    Console.WriteLine($" [ Формат файлов]: {(isLas ? "LAS 1.4 (DJI Zenmuse L2)" : "PLY")}");
-                    Console.WriteLine($" [ Сканов в базе]: {files.Count} шт.");
+                    Console.WriteLine($" [ Сканов в базе]: {files.Count} шт. (Формат: {(isLas ? "DJI LAS 1.4 RTK" : "PLY")})");
                 }
                 else
                 {
-                    Console.WriteLine($" [ Статус ]: Сканы не обнаружены. Готов к автогенерации.");
+                    Console.WriteLine($" [ Статус ]: Данных нет. Доступен режим автогенерации сканов.");
                 }
 
                 Console.WriteLine("----------------------------------------------------------");
-                Console.WriteLine(" 1. Задать путь к рабочей папке");
-                Console.WriteLine(" 2. Настроить шаг воксельной сетки");
-                Console.WriteLine(" 3. Выбрать сцену (Куча / Склад / Котлован)");
-                Console.WriteLine(" 4. Сгенерировать сканы (DJI L2 эмуляция + полное удаление)");
-                Console.WriteLine(" 5. [ЗАПУСК] Полная обработка (Очистка техники + Расчет)");
-                Console.WriteLine(" 6. Запустить Web-визуализатор (Three.js)");
-                Console.WriteLine(" 7. Открыть маркшейдерский протокол (HTML/PDF)");
-                Console.WriteLine(" 8. Сбросить геодезический базис project.json");
+                Console.WriteLine(" 1. Задать путь к рабочему каталогу");
+                Console.WriteLine(" 2. Настроить параметры грунта (Плотность, Кр, воксель)");
+                Console.WriteLine(" 3. Выбрать тип объекта");
+                Console.WriteLine(" 4. Сгенерировать эпохи (Эмуляция полетов DJI Matrice 350)");
+                Console.WriteLine(" 5. [РАСЧЕТ] Полный цикл (PMF + Фильтр техники + Маркшейдерия)");
+                Console.WriteLine(" 6. Запустить локальный 3D Web-визуализатор (Three.js)");
+                Console.WriteLine(" 7. Открыть маркшейдерский протокол (HTML / PDF)");
+                Console.WriteLine(" 8. Сбросить геодезический базис проекта");
                 Console.WriteLine(" 9. Выход");
                 Console.WriteLine("==========================================================");
                 Console.Write(" Выберите пункт: ");
@@ -70,12 +70,12 @@ namespace LidarRunner
                 switch (key.Key)
                 {
                     case ConsoleKey.D1: ConfigureDirectory(); break;
-                    case ConsoleKey.D2: ConfigureVoxel(); break;
+                    case ConsoleKey.D2: ConfigureParameters(); break;
                     case ConsoleKey.D3: SelectSceneType(); break;
                     case ConsoleKey.D4: GenerateCustomEpochs(); break;
                     case ConsoleKey.D5:
                         RunNDPipeline(files);
-                        Console.WriteLine("\nНажмите любую клавишу для возврата в меню...");
+                        Console.WriteLine("\nНажмите любую клавишу для продолжения...");
                         Console.ReadKey();
                         break;
                     case ConsoleKey.D6: ShowWebVisualizer(); break;
@@ -87,13 +87,13 @@ namespace LidarRunner
                         }
                         else
                         {
-                            Console.WriteLine("[ОШИБКА] Протокол еще не сформирован. Сначала выполните пункт 5.");
+                            Console.WriteLine("[ОШИБКА] Протокол не найден. Сначала выполните расчет (пункт 5).");
                             Thread.Sleep(1500);
                         }
                         break;
                     case ConsoleKey.D8:
                         ResetProjectState();
-                        Console.WriteLine("[ИНФО] Базис сброшен.");
+                        Console.WriteLine("[ИНФО] Базис проекта сброшен.");
                         Thread.Sleep(1000);
                         break;
                     case ConsoleKey.D9: return;
@@ -116,7 +116,7 @@ namespace LidarRunner
         static void ConfigureDirectory()
         {
             Console.Clear();
-            Console.Write("Введите путь к папке [Enter — текущая]: ");
+            Console.Write("Введите путь к каталогу [Enter — текущий]: ");
             string? dir = Console.ReadLine()?.Trim();
             if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
             {
@@ -125,21 +125,36 @@ namespace LidarRunner
             }
         }
 
-        static void ConfigureVoxel()
+        static void ConfigureParameters()
         {
             Console.Clear();
-            Console.Write($"Текущий воксель: {voxelStep:F3} м. Введите новый (м): ");
-            if (float.TryParse(Console.ReadLine()?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float s) && s > 0)
-                voxelStep = s;
+            var proj = ProjectConfig.LoadOrCreate(workDirectory);
+            Console.WriteLine("Настройка физико-механических параметров:");
+            Console.Write($"Плотность породы в целике (т/м3) [{proj.MaterialDensity:F2}]: ");
+            string? dStr = Console.ReadLine()?.Trim();
+            if (float.TryParse(dStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float d) && d > 0)
+                proj.MaterialDensity = d;
+
+            Console.Write($"Коэффициент разрыхления Кр [{proj.BulkingFactor:F2}]: ");
+            string? bStr = Console.ReadLine()?.Trim();
+            if (float.TryParse(bStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float b) && b >= 1.0f)
+                proj.BulkingFactor = b;
+
+            Console.Write($"Шаг вокселя сетки (м) [{voxelStep:F3}]: ");
+            string? vStr = Console.ReadLine()?.Trim();
+            if (float.TryParse(vStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float v) && v > 0)
+                voxelStep = v;
+
+            proj.Save(workDirectory);
         }
 
         static void SelectSceneType()
         {
             Console.Clear();
-            Console.WriteLine("Выберите тип сцены:");
-            Console.WriteLine(" 1. Карьерная куча / Насыпь (с техникой)");
-            Console.WriteLine(" 2. Склад паллет и штабелей (с погрузчиком)");
-            Console.WriteLine(" 3. Котлован / Кратер выемки (с буровым станком)");
+            Console.WriteLine("Выберите тип инспектируемого объекта:");
+            Console.WriteLine(" 1. Карьерная выемка / Разработка песка");
+            Console.WriteLine(" 2. Склад трубной продукции и штабелей МТР");
+            Console.WriteLine(" 3. Котлован под фундамент компрессорного цеха");
             Console.Write("Выбор: ");
             var k = Console.ReadKey(true);
             switch (k.Key)
@@ -162,8 +177,8 @@ namespace LidarRunner
         static void GenerateCustomEpochs()
         {
             Console.Clear();
-            Console.WriteLine($"Генерация сканов Zenmuse L2 для сцены: {selectedScene}");
-            Console.Write("Сколько этапов динамики создать после базиса? (по умолчанию 3): ");
+            Console.WriteLine($"Эмуляция полетов БПЛА для объекта: {selectedScene}");
+            Console.Write("Количество циклов мониторинга (по умолчанию 3): ");
             string? input = Console.ReadLine();
             int nStages = 3;
             if (int.TryParse(input, out int parsed) && parsed > 0) nStages = parsed;
@@ -172,41 +187,42 @@ namespace LidarRunner
             foreach (var f in Directory.GetFiles(workDirectory, "epoch_*.bin")) File.Delete(f);
             ResetProjectState();
 
-            Console.WriteLine("\n[1/3] Создание скана 1: Сырой скан с техникой в зоне...");
+            Console.WriteLine("\n[1/3] Полет 0: Первичный скан с работающей техникой...");
             string rawFile = Path.Combine(workDirectory, "epoch_0_raw.las");
             GenerateSyntheticLas(rawFile, selectedScene, 0.0f, true);
 
-            Console.WriteLine("[2/3] Создание скана 2: Базовый скан (нулевой горизонт)...");
+            Console.WriteLine("[2/3] Полет 1: Базисный скан (нулевой горизонт)...");
             string baseFile = Path.Combine(workDirectory, "epoch_1_base.las");
             GenerateSyntheticLas(baseFile, selectedScene, 0.0f, true);
 
             for (int i = 1; i <= nStages; i++)
             {
                 float frac = (float)i / nStages;
-                Console.WriteLine($"[3/3] Создание этапа выработки/отгрузки {i}/{nStages} ({frac * 100:F0}%)...");
+                Console.WriteLine($"[3/3] Полет {i + 1}: Замер динамики выработки {i}/{nStages} ({frac * 100:F0}%)...");
                 string stageFile = Path.Combine(workDirectory, $"epoch_{i + 1}_stage_{i}.las");
                 GenerateSyntheticLas(stageFile, selectedScene, frac, true);
             }
 
-            Console.WriteLine("\n[ГОТОВО] Сканы сформированы со спецификацией DJI Zenmuse L2.");
+            Console.WriteLine("\n[УСПЕХ] Облака сформированы в формате LAS 1.4 Zenmuse L2.");
             Console.ReadKey();
         }
 
         static void RunNDPipeline(List<string> inputFiles)
         {
-            Console.WriteLine("\n=== 1. ЗАГРУЗКА, СЕГМЕНТАЦИЯ ТЕХНИКИ И РАСЧЕТ ===");
+            Console.WriteLine("\n=== ЗАПУСК ВЫСОКОПРОИЗВОДИТЕЛЬНОГО КОНВЕЙЕРА МАРКШЕЙДЕРИИ ===");
 
             if (inputFiles.Count == 0)
             {
-                Console.WriteLine("[ИНФО] Данных нет. Автогенерация базового сценария...");
+                Console.WriteLine("[ИНФО] В каталоге нет файлов. Автогенерация тестовой сцены...");
                 GenerateCustomEpochs();
                 inputFiles = ScanWorkDirectory(workDirectory).files;
             }
 
+            var proj = ProjectConfig.LoadOrCreate(workDirectory);
             Stopwatch globalSw = Stopwatch.StartNew();
 
-            var aoi = BoundaryPolygon.LoadOrCreateDefault(workDirectory, defaultRadius: 11.5f);
-            Console.WriteLine($"[AOI] Активен контур полигона: {aoi.Vertices.Count} вершин.");
+            var aoi = BoundaryPolygon.LoadOrCreate(workDirectory, defaultRadius: 12.0f);
+            Console.WriteLine($"[AOI] Граница расчетной зоны утверждена ({aoi.Vertices.Count} вершин).");
 
             List<Vector3>? stableBaseVectors = null;
             List<Point3D>? baseCloud = null;
@@ -214,64 +230,62 @@ namespace LidarRunner
             var metaEpochs = new List<object>();
             var reportEpochs = new List<EpochReportData>();
 
-            float cellSize = Math.Max(0.08f, voxelStep * 1.5f);
+            float cellSize = Math.Max(0.10f, voxelStep * 1.5f);
 
             for (int i = 0; i < inputFiles.Count; i++)
             {
                 string currentFile = inputFiles[i];
                 string binFile = $"epoch_{i}.bin";
 
-                string stageType = i == 0 ? "RAW_SCAN" : (i == 1 ? "CLEANED_BASE" : "EXCAVATION_PROGRESS");
-                string stageTitle = i == 0 ? "Этап 1: До очистки техники" : (i == 1 ? "Этап 2: Базис после очистки" : $"Этап {i + 1}: Шаг выработки/отгрузки #{i - 1}");
+                string stageType = i == 0 ? "RAW_SCAN" : (i == 1 ? "CLEANED_BASE" : "PROGRESS");
+                string stageTitle = i == 0 ? "Скан 1: До удаления техники" : (i == 1 ? "Скан 2: Базовый горизонт" : $"Скан {i + 1}: Мониторинг #{i - 1}");
 
-                Console.WriteLine($"\n=== {stageTitle.ToUpper()} ({Path.GetFileName(currentFile)}) ===");
+                Console.WriteLine($"\n--- {stageTitle.ToUpper()} ({Path.GetFileName(currentFile)}) ---");
 
                 Stopwatch readSw = Stopwatch.StartNew();
                 var rawPoints = LidarPipeline.LoadScanAuto(currentFile, workDirectory);
                 readSw.Stop();
-                Console.WriteLine($"  [Чтение]: {readSw.ElapsedMilliseconds} мс ({rawPoints.Count} точек, DJI LAS 1.4)");
+                Console.WriteLine($"  [Чтение ASPRS]: {readSw.ElapsedMilliseconds} мс | Точек: {rawPoints.Count}");
 
                 Stopwatch filterSw = Stopwatch.StartNew();
-                List<Point3D> classifiedPoints;
-
-                if (selectedScene == SceneType.Warehouse)
-                {
-                    classifiedPoints = MathApparatus.FilterWarehouseMachinery(rawPoints, floorElevation: 0.08f);
-                }
-                else
-                {
-                    classifiedPoints = MathApparatus.ClassifyGroundAndObjects(rawPoints, gridCellSize: 0.45f, heightThreshold: 0.25f);
-                }
+                var classifiedPoints = MathApparatus.ClassifyGroundAndObjects(rawPoints, gridCellSize: 0.5f, heightThreshold: 0.25f);
                 filterSw.Stop();
-                Console.WriteLine($"  [PMF Сегментация рельефа]: {filterSw.ElapsedMilliseconds} мс");
+                Console.WriteLine($"  [PMF-сегментация рельефа]: {filterSw.ElapsedMilliseconds} мс");
 
                 var masterCloud = new List<Point3D>();
 
+                // Юстировка с контролем дрейфа: применяется только к стабильным поверхностям вне AOI
                 if (stableBaseVectors != null)
                 {
                     Stopwatch icpSw = Stopwatch.StartNew();
                     var stableCurrentVectors = ExtractStableVectors(classifiedPoints, aoi);
-                    var (icpTransform, error) = MathApparatus.AlignCloudsICP(stableCurrentVectors, stableBaseVectors, 8);
+                    var (icpTransform, error, isReliable) = MathApparatus.AlignCloudsICP(stableCurrentVectors, stableBaseVectors, 8, maxAllowedShift: 0.35f);
 
-                    for (int j = 0; j < classifiedPoints.Count; j++)
+                    if (isReliable)
                     {
-                        var p = classifiedPoints[j];
-                        var v = Vector3.Transform(new Vector3(p.X, p.Y, p.Z), icpTransform);
-                        masterCloud.Add(new Point3D(v.X, v.Y, v.Z, p.R, p.G, p.B, p.Classification, p.ReturnInfo));
+                        for (int j = 0; j < classifiedPoints.Count; j++)
+                        {
+                            var p = classifiedPoints[j];
+                            var v = Vector3.Transform(new Vector3(p.X, p.Y, p.Z), icpTransform);
+                            masterCloud.Add(new Point3D(v.X, v.Y, v.Z, p.R, p.G, p.B, p.Classification, p.ReturnInfo));
+                        }
+                        Console.WriteLine($"  [Опорный ICP]: сшито ({icpSw.ElapsedMilliseconds} мс), Невязка: {error:F4} м");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  [RTK-контроль]: ICP отклонен (сдвиг {error:F2} м > допустимого). Сохранена прямая RTK-привязка.");
+                        masterCloud.AddRange(classifiedPoints);
                     }
                     icpSw.Stop();
-                    Console.WriteLine($"  [Опорный ICP]: {icpSw.ElapsedMilliseconds} мс. Невязка: {error:F4} м");
                 }
                 else
                 {
                     masterCloud.AddRange(classifiedPoints);
                 }
 
-                Stopwatch voxelSw = Stopwatch.StartNew();
                 var optimizedCloud = LidarPipeline.VoxelFilter(masterCloud, voxelStep);
-                voxelSw.Stop();
-                Console.WriteLine($"  [Воксель {voxelStep}м]: {voxelSw.ElapsedMilliseconds} мс. Точек: {optimizedCloud.Count}");
 
+                // Очистка облака от строительной техники для финального экспорта
                 List<Point3D> exportCloud;
                 if (i == 0)
                 {
@@ -282,15 +296,11 @@ namespace LidarRunner
                     exportCloud = new List<Point3D>(optimizedCloud.Count);
                     for (int p = 0; p < optimizedCloud.Count; p++)
                     {
-                        if (optimizedCloud[p].Classification != 64)
-                        {
-                            exportCloud.Add(optimizedCloud[p]);
-                        }
+                        if (optimizedCloud[p].Classification != 64) exportCloud.Add(optimizedCloud[p]);
                     }
                 }
 
-                VolumeBalance balance = new VolumeBalance(0, 0, 0, 0, 0);
-                Stopwatch volumeSw = Stopwatch.StartNew();
+                VolumeBalance balance = new VolumeBalance(0, 0, 0, 0, 0, proj.MaterialDensity, proj.BulkingFactor, 0.0);
 
                 if (i == 1)
                 {
@@ -300,18 +310,14 @@ namespace LidarRunner
                 else if (i > 1 && baseCloud != null)
                 {
                     string gridCsvPath = Path.Combine(workDirectory, $"grid_diff_epoch_{i}.csv");
-                    balance = MathApparatus.CalculateVolumeBalance(baseCloud, optimizedCloud, cellSize, aoi, filterMachinery: true, exportGridCsv: gridCsvPath);
+                    balance = MathApparatus.CalculateVolumeBalance(baseCloud, optimizedCloud, cellSize, aoi,
+                        proj.MaterialDensity, proj.BulkingFactor, filterMachinery: true, exportGridCsv: gridCsvPath);
                 }
-                volumeSw.Stop();
 
-                Console.WriteLine($"  [Маркшейдерия AOI]: {volumeSw.ElapsedMilliseconds} мс");
-                Console.WriteLine($"  -> ВЫЕМКА (Cut): +{balance.CutVolume:N2} м3 | НАСЫПЬ (Fill): -{balance.FillVolume:N2} м3 | ПЛОЩАДЬ: {balance.AreaCut:N1} м2");
+                Console.WriteLine($"  [Маркшейдерия]: Выемка: +{balance.CutVolume:N2} м³ ({balance.MaterialWeightTon:N1} т) | СКП: ±{balance.RmseElevation:F3} м");
 
                 LidarPipeline.ExportToBinary(exportCloud, Path.Combine(workDirectory, binFile));
-                Stopwatch octreeSw = Stopwatch.StartNew();
                 var octreeMeta = LidarPipeline.BuildAndExportOctreeLOD(exportCloud, workDirectory, $"epoch_{i}", maxPointsPerNode: 60000);
-                octreeSw.Stop();
-                Console.WriteLine($"  [Octree LOD Builder]: Нарезано {octreeMeta.Nodes.Count} узлов за {octreeSw.ElapsedMilliseconds} мс");
 
                 metaEpochs.Add(new
                 {
@@ -321,9 +327,12 @@ namespace LidarRunner
                     BinFile = binFile,
                     Octree = octreeMeta,
                     CutVolume = Math.Round(balance.CutVolume, 2),
+                    BulkedVolume = Math.Round(balance.BulkedVolume, 2),
+                    WeightTon = Math.Round(balance.MaterialWeightTon, 1),
                     FillVolume = Math.Round(balance.FillVolume, 2),
                     NetVolume = Math.Round(balance.NetVolume, 2),
                     AreaCut = Math.Round(balance.AreaCut, 1),
+                    Rmse = Math.Round(balance.RmseElevation, 3),
                     MaxDepth = Math.Round(balance.MaxDepth, 2)
                 });
 
@@ -333,11 +342,14 @@ namespace LidarRunner
                     Title = stageTitle,
                     FileName = Path.GetFileName(currentFile),
                     CutVolume = Math.Round(balance.CutVolume, 2),
+                    BulkedVolume = Math.Round(balance.BulkedVolume, 2),
+                    MaterialWeightTon = Math.Round(balance.MaterialWeightTon, 1),
                     FillVolume = Math.Round(balance.FillVolume, 2),
                     NetVolume = Math.Round(balance.NetVolume, 2),
                     AreaCut = Math.Round(balance.AreaCut, 1),
                     AreaFill = Math.Round(balance.AreaFill, 1),
-                    MaxDepth = Math.Round(balance.MaxDepth, 2)
+                    MaxDepth = Math.Round(balance.MaxDepth, 2),
+                    RmseElevation = Math.Round(balance.RmseElevation, 3)
                 });
             }
 
@@ -349,13 +361,10 @@ namespace LidarRunner
             };
 
             File.WriteAllText(Path.Combine(workDirectory, "meta.json"), JsonSerializer.Serialize(metaData, new JsonSerializerOptions { WriteIndented = true }));
-
-            string reportFile = Path.Combine(workDirectory, "report.html");
-            ReportGenerator.GenerateHtmlReport(reportFile, selectedScene.ToString(), LidarPipeline.CurrentProject, reportEpochs);
-            Console.WriteLine($"\n[ОТЧЕТНОСТЬ] Маркшейдерский протокол сформирован: report.html");
+            ReportGenerator.GenerateHtmlReport(Path.Combine(workDirectory, "report.html"), selectedScene.ToString(), proj, reportEpochs);
 
             globalSw.Stop();
-            Console.WriteLine($"[ИТОГ] Расчет завершен за {globalSw.ElapsedMilliseconds} мс.");
+            Console.WriteLine($"\n[ИТОГ] Расчет завершен за {globalSw.ElapsedMilliseconds} мс. Отчет: report.html");
         }
 
         static List<Vector3> ExtractStableVectors(List<Point3D> points, BoundaryPolygon aoi)
@@ -364,7 +373,8 @@ namespace LidarRunner
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-                if (pt.Classification == 2 && !aoi.IsPointInside(pt.X, pt.Z))
+                // Стабильные точки: земля вне зоны горных/строительных работ
+                if (pt.Classification == 2 && !aoi.IsPointInside(pt.X, pt.Y))
                 {
                     list.Add(new Vector3(pt.X, pt.Y, pt.Z));
                 }
@@ -411,10 +421,10 @@ namespace LidarRunner
                 for (float y = -15.0f; y <= 15.0f; y += step)
                 {
                     float r = MathF.Sqrt(x * x + y * y);
-                    float baseZ = (x * 0.05f) + (y * 0.04f);
+                    float baseZ = (x * 0.04f) + (y * 0.03f);
                     float z = baseZ;
 
-                    if (r < 10.0f) z += 5.0f * MathF.Cos(r * MathF.PI / 20.0f);
+                    if (r < 10.0f) z += 4.5f * MathF.Cos(r * MathF.PI / 20.0f);
 
                     if (digFraction > 0.0f)
                     {
@@ -422,19 +432,20 @@ namespace LidarRunner
                         float pitRadius = 6.0f * digFraction + 1.0f;
                         if (pitDist < pitRadius)
                         {
-                            float digDepth = (4.5f * digFraction) * MathF.Cos(pitDist * MathF.PI / (pitRadius * 2.0f));
+                            float digDepth = (4.0f * digFraction) * MathF.Cos(pitDist * MathF.PI / (pitRadius * 2.0f));
                             z -= digDepth;
-                            if (z < baseZ + 0.2f) z = baseZ + 0.2f;
+                            if (z < baseZ + 0.15f) z = baseZ + 0.15f;
                         }
                     }
 
-                    z += (MathF.Sin(x * 2.0f) * MathF.Cos(y * 2.0f)) * 0.04f;
+                    z += (MathF.Sin(x * 2.0f) * MathF.Cos(y * 2.0f)) * 0.03f;
 
-                    byte rC = (byte)(r < 10.0f ? 175 : 120);
-                    byte gC = (byte)(r < 10.0f ? 145 : 110);
-                    byte bC = (byte)(r < 10.0f ? 100 : 95);
+                    byte rC = (byte)(r < 10.0f ? 180 : 120);
+                    byte gC = (byte)(r < 10.0f ? 150 : 110);
+                    byte bC = (byte)(r < 10.0f ? 100 : 90);
 
-                    points.Add(new Point3D(x, z, y, rC, gC, bC, classification: 1, returnInfo: 0x11));
+                    // Геодезический стандарт: X, Y, Z
+                    points.Add(new Point3D(x, y, z, rC, gC, bC, classification: 1, returnInfo: 0x11));
                 }
             }
         }
@@ -447,8 +458,7 @@ namespace LidarRunner
                 for (float y = -14.0f; y <= 14.0f; y += step)
                 {
                     byte rC = 160, gC = 165, bC = 175;
-                    if (MathF.Abs(x) < 0.25f || MathF.Abs(y) < 0.25f) { rC = 230; gC = 190; bC = 20; }
-                    points.Add(new Point3D(x, 0.0f, y, rC, gC, bC, classification: 1, returnInfo: 0x11));
+                    points.Add(new Point3D(x, y, 0.0f, rC, gC, bC, classification: 1, returnInfo: 0x11));
                 }
             }
 
@@ -461,7 +471,7 @@ namespace LidarRunner
                     float currentHeight = 2.8f * (1.0f - pickupFraction * 0.85f);
                     if (currentHeight > 0.3f)
                     {
-                        AddSolidBox(points, boxX, rowY, 0.0f, 2.2f, 1.8f, currentHeight, 185, 135, 75, classification: 1);
+                        AddSolidBox(points, boxX, rowY, 0.0f, 2.2f, 1.8f, currentHeight, 185, 135, 75, 1);
                     }
                 }
             }
@@ -480,16 +490,16 @@ namespace LidarRunner
 
                     if (r < craterOuterR)
                     {
-                        float targetDepth = 7.0f * (0.25f + 0.75f * digFraction);
+                        float targetDepth = 6.5f * (0.25f + 0.75f * digFraction);
                         z -= targetDepth * MathF.Cos(r * MathF.PI / (craterOuterR * 2.0f));
-                        z += MathF.Sin(r * 3.0f) * 0.15f;
+                        z += MathF.Sin(r * 3.0f) * 0.12f;
                     }
 
                     byte rC = (byte)(r >= craterOuterR ? 110 : (z < 0 ? 150 : 90));
                     byte gC = (byte)(r >= craterOuterR ? 130 : (z < 0 ? 115 : 80));
                     byte bC = (byte)(r >= craterOuterR ? 85 : (z < 0 ? 80 : 70));
 
-                    points.Add(new Point3D(x, z, y, rC, gC, bC, classification: 1, returnInfo: 0x11));
+                    points.Add(new Point3D(x, y, z, rC, gC, bC, classification: 1, returnInfo: 0x11));
                 }
             }
         }
@@ -507,24 +517,17 @@ namespace LidarRunner
                 float bz = 2.5f + MathF.Sin(t * MathF.PI) * 3.0f;
                 AddSolidBox(points, bx, by, bz, 0.45f, 0.45f, 0.45f, 245, 175, 15, 1);
             }
-
-            AddSolidBox(points, 7.5f, 6.0f, 1.2f, 4.2f, 2.6f, 1.8f, 220, 140, 20, 1);
-            AddSolidBox(points, -12.0f, 10.0f, 0.0f, 4.5f, 2.4f, 2.4f, 40, 100, 200, 1);
         }
 
         private static void AddWarehouseMachinery(List<Point3D> points)
         {
             AddSolidBox(points, 0.0f, -1.0f, 0.2f, 1.8f, 1.2f, 0.7f, 255, 190, 0, 1);
             AddSolidBox(points, 0.0f, -1.0f, 0.9f, 1.2f, 1.0f, 1.3f, 40, 40, 40, 1);
-            AddSolidBox(points, 1.1f, -1.0f, 0.1f, 0.25f, 0.9f, 2.7f, 50, 50, 55, 1);
-            AddSolidBox(points, 1.6f, -1.0f, 0.15f, 0.9f, 0.7f, 0.1f, 20, 20, 20, 1);
         }
 
         private static void AddCraterMachinery(List<Point3D> points)
         {
             AddSolidBox(points, -8.5f, 4.5f, 3.6f, 3.5f, 2.4f, 1.8f, 220, 90, 20, 1);
-            AddSolidBox(points, -8.5f, 4.5f, 5.4f, 1.5f, 1.3f, 1.4f, 70, 70, 75, 1);
-            AddSolidBox(points, -6.8f, 4.5f, 3.6f, 0.4f, 0.4f, 5.2f, 40, 40, 40, 1);
         }
 
         private static void AddSolidBox(List<Point3D> points, float cx, float cy, float cz,
@@ -547,7 +550,7 @@ namespace LidarRunner
 
                         if (isEdge)
                         {
-                            points.Add(new Point3D(x, z, y, r, g, b, classification, 0x11));
+                            points.Add(new Point3D(x, y, z, r, g, b, classification, 0x11));
                         }
                     }
                 }
@@ -558,12 +561,12 @@ namespace LidarRunner
         {
             uint totalPoints = (uint)points.Count;
 
-            using var fs = new FileStream(lasPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024);
+            using var fs = new FileStream(lasPath, FileMode.Create, FileAccess.Write, FileShare.None, 2 * 1024 * 1024);
             using var bw = new BinaryWriter(fs);
 
             bw.Write(new byte[] { (byte)'L', (byte)'A', (byte)'S', (byte)'F' });
             bw.Write((ushort)0); bw.Write((ushort)0); bw.Write(new byte[16]);
-            bw.Write((byte)1); bw.Write((byte)4);
+            bw.Write((byte)1); bw.Write((byte)4); // LAS 1.4
             bw.Write(new byte[32]);
             bw.Write(Encoding.ASCII.GetBytes("DJI Terra Zenmuse L2".PadRight(32, '\0')));
             bw.Write((ushort)0); bw.Write((ushort)2026);
@@ -571,13 +574,12 @@ namespace LidarRunner
             bw.Write((uint)375);
 
             bw.Write((uint)0);
-            bw.Write((byte)7);
+            bw.Write((byte)7); // Формат записи точки 7 (GPS Time + RGB)
             bw.Write((ushort)36);
             bw.Write((uint)0);
-
             bw.Write(new byte[20]);
 
-            double scale = 0.001;
+            double scale = 0.001; // Масштаб 1 мм
             double geoShiftX = 5432000.0;
             double geoShiftY = 3210000.0;
             double geoShiftZ = 150.0;
@@ -598,15 +600,12 @@ namespace LidarRunner
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-                double realX = pt.X;
-                double realY = pt.Z;
-                double realZ = pt.Y;
+                // Строгая запись в соответствии с геодезическими осями
+                bw.Write((int)(pt.X / scale));
+                bw.Write((int)(pt.Y / scale));
+                bw.Write((int)(pt.Z / scale));
 
-                bw.Write((int)(realX / scale));
-                bw.Write((int)(realY / scale));
-                bw.Write((int)(realZ / scale));
-
-                bw.Write((ushort)1200);
+                bw.Write((ushort)1200); // Intensity
                 bw.Write(pt.ReturnInfo);
                 bw.Write((byte)0);
                 bw.Write(pt.Classification);
@@ -631,8 +630,8 @@ namespace LidarRunner
                 listener.Start();
                 try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
 
-                Console.WriteLine($"\n[СЕРВЕР] Визуализатор: {url}");
-                Console.WriteLine("Нажмите клавишу для выхода...");
+                Console.WriteLine($"\n[СЕРВЕР] 3D-визуализатор запущен: {url}");
+                Console.WriteLine("Нажмите клавишу для остановки сервера...");
 
                 bool isRunning = true;
                 ThreadPool.QueueUserWorkItem(_ =>

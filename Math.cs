@@ -9,21 +9,28 @@ namespace LidarProcessorMVP
 {
     public readonly struct VolumeBalance
     {
-        public readonly double CutVolume;
-        public readonly double FillVolume;
-        public readonly double NetVolume;
-        public readonly double AreaCut;
-        public readonly double AreaFill;
-        public readonly double MaxDepth;
+        public readonly double CutVolume;         // Геометрическая выемка в целике (м3)
+        public readonly double FillVolume;        // Геометрическая насыпь (м3)
+        public readonly double NetVolume;         // Чистый баланс (м3)
+        public readonly double BulkedVolume;      // Объем с учетом Кр (м3)
+        public readonly double MaterialWeightTon; // Масса перемещенной породы (тонн)
+        public readonly double AreaCut;           // Площадь выемки (м2)
+        public readonly double AreaFill;          // Площадь насыпи (м2)
+        public readonly double MaxDepth;          // Максимальная глубина (м)
+        public readonly double RmseElevation;     // СКП по высоте (м)
 
-        public VolumeBalance(double cut, double fill, double areaCut, double areaFill, double maxDepth)
+        public VolumeBalance(double cut, double fill, double areaCut, double areaFill, double maxDepth, 
+                             float density, float bulkingFactor, double rmse)
         {
             CutVolume = cut;
             FillVolume = fill;
             NetVolume = cut - fill;
+            BulkedVolume = cut * bulkingFactor;
+            MaterialWeightTon = CutVolume * density;
             AreaCut = areaCut;
             AreaFill = areaFill;
             MaxDepth = maxDepth;
+            RmseElevation = rmse;
         }
     }
 
@@ -31,7 +38,7 @@ namespace LidarProcessorMVP
     {
         public List<Vector2> Vertices { get; set; } = new List<Vector2>();
 
-        public bool IsPointInside(float x, float z)
+        public bool IsPointInside(float x, float y)
         {
             if (Vertices == null || Vertices.Count < 3) return true;
 
@@ -43,8 +50,8 @@ namespace LidarProcessorMVP
                 var vi = Vertices[i];
                 var vj = Vertices[j];
 
-                if (((vi.Y > z) != (vj.Y > z)) &&
-                    (x < (vj.X - vi.X) * (z - vi.Y) / (vj.Y - vi.Y) + vi.X))
+                if (((vi.Y > y) != (vj.Y > y)) &&
+                    (x < (vj.X - vi.X) * (y - vi.Y) / (vj.Y - vi.Y) + vi.X))
                 {
                     inside = !inside;
                 }
@@ -54,72 +61,111 @@ namespace LidarProcessorMVP
             return inside;
         }
 
-        public static BoundaryPolygon LoadOrCreateDefault(string dir, float defaultRadius = 11.5f)
+        public static BoundaryPolygon LoadOrCreate(string dir, float defaultRadius = 12.0f)
         {
-            string path = Path.Combine(dir, "boundary.json");
-            if (File.Exists(path))
+            string geoJsonPath = Path.Combine(dir, "boundary.geojson");
+            if (File.Exists(geoJsonPath))
             {
                 try
                 {
-                    string json = File.ReadAllText(path);
-                    var poly = JsonSerializer.Deserialize<BoundaryPolygon>(json);
+                    var poly = ParseGeoJsonPolygon(File.ReadAllText(geoJsonPath));
+                    if (poly.Vertices.Count >= 3) return poly;
+                }
+                catch { }
+            }
+
+            string jsonPath = Path.Combine(dir, "boundary.json");
+            if (File.Exists(jsonPath))
+            {
+                try
+                {
+                    var poly = JsonSerializer.Deserialize<BoundaryPolygon>(File.ReadAllText(jsonPath));
                     if (poly != null && poly.Vertices.Count >= 3) return poly;
                 }
                 catch { }
             }
 
             var defaultPoly = new BoundaryPolygon();
-            int segments = 12;
+            int segments = 16;
             for (int i = 0; i < segments; i++)
             {
                 float angle = i * MathF.PI * 2.0f / segments;
                 defaultPoly.Vertices.Add(new Vector2(MathF.Cos(angle) * defaultRadius, MathF.Sin(angle) * defaultRadius));
             }
 
-            string outJson = JsonSerializer.Serialize(defaultPoly, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(path, outJson);
+            File.WriteAllText(jsonPath, JsonSerializer.Serialize(defaultPoly, new JsonSerializerOptions { WriteIndented = true }));
             return defaultPoly;
+        }
+
+        private static BoundaryPolygon ParseGeoJsonPolygon(string geoJson)
+        {
+            var poly = new BoundaryPolygon();
+            using var doc = JsonDocument.Parse(geoJson);
+            var root = doc.RootElement;
+
+            JsonElement coordsArray = default;
+            if (root.TryGetProperty("geometry", out var geom) && geom.TryGetProperty("coordinates", out var coords))
+                coordsArray = coords[0];
+            else if (root.TryGetProperty("coordinates", out var coordsDirect))
+                coordsArray = coordsDirect[0];
+
+            if (coordsArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var pt in coordsArray.EnumerateArray())
+                {
+                    float x = pt[0].GetSingle();
+                    float y = pt[1].GetSingle();
+                    poly.Vertices.Add(new Vector2(x, y));
+                }
+            }
+            return poly;
         }
     }
 
     public static class MathApparatus
     {
-        public static List<Point3D> ClassifyGroundAndObjects(List<Point3D> points, float gridCellSize = 0.45f, float heightThreshold = 0.25f)
+        // Прогрессивный морфологический фильтр (PMF) с отсечением растительности по мультиэхо Zenmuse L2
+        public static List<Point3D> ClassifyGroundAndObjects(List<Point3D> points, float gridCellSize = 0.5f, float heightThreshold = 0.25f)
         {
             if (points == null || points.Count == 0) return new List<Point3D>();
 
-            float minX = float.MaxValue, minZ = float.MaxValue;
-            float maxX = float.MinValue, maxZ = float.MinValue;
+            float minX = float.MaxValue, minY = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue;
 
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
                 if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X;
-                if (pt.Z < minZ) minZ = pt.Z; if (pt.Z > maxZ) maxZ = pt.Z;
+                if (pt.Y < minY) minY = pt.Y; if (pt.Y > maxY) maxY = pt.Y;
             }
 
             int cols = (int)MathF.Ceiling((maxX - minX) / gridCellSize) + 1;
-            int rows = (int)MathF.Ceiling((maxZ - minZ) / gridCellSize) + 1;
+            int rows = (int)MathF.Ceiling((maxY - minY) / gridCellSize) + 1;
             int totalCells = cols * rows;
 
             float[] minElevationGrid = new float[totalCells];
             Array.Fill(minElevationGrid, float.MaxValue);
 
+            // Шаг 1: Формирование базиса рельефа по последним эхо (отражение от земли)
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
+                // Если точка имеет несколько возвратов и не является последним эхом — это крона/растительность
+                if (!pt.IsLastReturn && pt.NumberOfReturns > 1) continue;
+
                 int c = (int)((pt.X - minX) / gridCellSize);
-                int r = (int)((pt.Z - minZ) / gridCellSize);
+                int r = (int)((pt.Y - minY) / gridCellSize);
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
-                    if (pt.Y < minElevationGrid[idx])
+                    if (pt.Z < minElevationGrid[idx])
                     {
-                        minElevationGrid[idx] = pt.Y;
+                        minElevationGrid[idx] = pt.Z;
                     }
                 }
             }
 
+            // Шаг 2: Сглаживание микрорельефа
             float[] smoothedGround = new float[totalCells];
             Array.Copy(minElevationGrid, smoothedGround, totalCells);
 
@@ -149,70 +195,41 @@ namespace LidarProcessorMVP
                 }
             }
 
+            // Шаг 3: Классификация (ASPRS: 2 - Ground, 64 - Техника/Временные объекты)
             byte[] pointClasses = new byte[points.Count];
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
                 int c = (int)((pt.X - minX) / gridCellSize);
-                int r = (int)((pt.Z - minZ) / gridCellSize);
+                int r = (int)((pt.Y - minY) / gridCellSize);
 
-                byte cls = 2;
+                byte cls = 2; // Земля / базовая поверхность
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
-                    float groundY = smoothedGround[idx];
-                    if (groundY < float.MaxValue - 100f)
+                    float groundZ = smoothedGround[idx];
+                    if (groundZ < float.MaxValue - 100f)
                     {
-                        if (pt.Y - groundY > heightThreshold)
+                        if (pt.Z - groundZ > heightThreshold)
                         {
-                            cls = 64;
+                            cls = 64; // Отвалы с техникой / строения
                         }
                     }
                 }
                 pointClasses[i] = cls;
             }
 
-            bool[] machineryFootprint = new bool[totalCells];
-            for (int i = 0; i < points.Count; i++)
-            {
-                if (pointClasses[i] == 64)
-                {
-                    int c = (int)((points[i].X - minX) / gridCellSize);
-                    int r = (int)((points[i].Z - minZ) / gridCellSize);
-                    if (c >= 0 && c < cols && r >= 0 && r < rows)
-                    {
-                        for (int dr = -1; dr <= 1; dr++)
-                        {
-                            for (int dc = -1; dc <= 1; dc++)
-                            {
-                                int nr = r + dr;
-                                int nc = c + dc;
-                                if (nc >= 0 && nc < cols && nr >= 0 && nr < rows)
-                                {
-                                    machineryFootprint[nr * cols + nc] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             var classified = new List<Point3D>(points.Count);
             for (int i = 0; i < points.Count; i++)
             {
                 var pt = points[i];
-                int c = (int)((pt.X - minX) / gridCellSize);
-                int r = (int)((pt.Z - minZ) / gridCellSize);
-
                 byte cls = pointClasses[i];
 
-                if (c >= 0 && c < cols && r >= 0 && r < rows && machineryFootprint[r * cols + c])
+                // Сигнатурный цветовой фильтр на промышленную спецтехнику (экскаваторы Komatsu/CAT желтых оттенков)
+                if (cls == 64)
                 {
-                    bool isMachineryColor = (pt.R > 180 && pt.G > 80 && pt.B < 70) || (pt.R < 60 && pt.G < 60 && pt.B < 60);
-                    if (isMachineryColor || cls == 64)
-                    {
-                        cls = 64;
-                    }
+                    bool isMachineryColor = (pt.R > 180 && pt.G > 80 && pt.B < 70) || (pt.R < 50 && pt.G < 50 && pt.B < 50);
+                    if (isMachineryColor) cls = 64;
                 }
 
                 classified.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls, pt.ReturnInfo));
@@ -221,171 +238,16 @@ namespace LidarProcessorMVP
             return classified;
         }
 
-        public static List<Point3D> FilterWarehouseMachinery(List<Point3D> points, float floorElevation = 0.08f)
-        {
-            if (points == null || points.Count == 0) return new List<Point3D>();
-
-            var floorPoints = new List<Point3D>(points.Count / 3);
-            var objectPoints = new List<Point3D>(points.Count);
-
-            for (int i = 0; i < points.Count; i++)
-            {
-                var pt = points[i];
-                if (pt.Y <= floorElevation)
-                {
-                    floorPoints.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, 2, pt.ReturnInfo));
-                }
-                else
-                {
-                    objectPoints.Add(pt);
-                }
-            }
-
-            float clusterCell = 0.45f;
-            float invCell = 1.0f / clusterCell;
-            var gridMap = new Dictionary<long, List<int>>(objectPoints.Count / 4);
-
-            for (int i = 0; i < objectPoints.Count; i++)
-            {
-                var pt = objectPoints[i];
-                long gx = (long)MathF.Floor(pt.X * invCell);
-                long gy = (long)MathF.Floor(pt.Y * invCell);
-                long gz = (long)MathF.Floor(pt.Z * invCell);
-                long key = ((gx & 0x1FFFFFL) << 42) | ((gy & 0x1FFFFFL) << 21) | (gz & 0x1FFFFFL);
-
-                if (!gridMap.TryGetValue(key, out var list))
-                {
-                    list = new List<int>(16);
-                    gridMap[key] = list;
-                }
-                list.Add(i);
-            }
-
-            int[] clusterLabels = new int[objectPoints.Count];
-            Array.Fill(clusterLabels, -1);
-            int currentClusterId = 0;
-
-            var queue = new Queue<int>(1024);
-
-            for (int i = 0; i < objectPoints.Count; i++)
-            {
-                if (clusterLabels[i] != -1) continue;
-
-                clusterLabels[i] = currentClusterId;
-                queue.Enqueue(i);
-
-                while (queue.Count > 0)
-                {
-                    int currIdx = queue.Dequeue();
-                    var pt = objectPoints[currIdx];
-                    long gx = (long)MathF.Floor(pt.X * invCell);
-                    long gy = (long)MathF.Floor(pt.Y * invCell);
-                    long gz = (long)MathF.Floor(pt.Z * invCell);
-
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        for (int dy = -1; dy <= 1; dy++)
-                        {
-                            for (int dz = -1; dz <= 1; dz++)
-                            {
-                                long neighborKey = (((gx + dx) & 0x1FFFFFL) << 42) |
-                                                   (((gy + dy) & 0x1FFFFFL) << 21) |
-                                                   ((gz + dz) & 0x1FFFFFL);
-
-                                if (gridMap.TryGetValue(neighborKey, out var neighborIndices))
-                                {
-                                    for (int n = 0; n < neighborIndices.Count; n++)
-                                    {
-                                        int nIdx = neighborIndices[n];
-                                        if (clusterLabels[nIdx] == -1)
-                                        {
-                                            clusterLabels[nIdx] = currentClusterId;
-                                            queue.Enqueue(nIdx);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                currentClusterId++;
-            }
-
-            var clusterMin = new Vector3[currentClusterId];
-            var clusterMax = new Vector3[currentClusterId];
-            var clusterCounts = new int[currentClusterId];
-            var clusterMidHeightPoints = new int[currentClusterId];
-
-            for (int c = 0; c < currentClusterId; c++)
-            {
-                clusterMin[c] = new Vector3(float.MaxValue);
-                clusterMax[c] = new Vector3(float.MinValue);
-            }
-
-            for (int i = 0; i < objectPoints.Count; i++)
-            {
-                int c = clusterLabels[i];
-                if (c < 0) continue;
-                var pt = objectPoints[i];
-
-                clusterCounts[c]++;
-                clusterMin[c] = Vector3.Min(clusterMin[c], new Vector3(pt.X, pt.Y, pt.Z));
-                clusterMax[c] = Vector3.Max(clusterMax[c], new Vector3(pt.X, pt.Y, pt.Z));
-
-                if (pt.Y >= 0.8f && pt.Y <= 1.8f)
-                {
-                    clusterMidHeightPoints[c]++;
-                }
-            }
-
-            bool[] isMachineryCluster = new bool[currentClusterId];
-
-            for (int c = 0; c < currentClusterId; c++)
-            {
-                if (clusterCounts[c] < 30) continue;
-
-                var size = clusterMax[c] - clusterMin[c];
-                float boundingVolume = Math.Max(0.01f, size.X * size.Y * size.Z);
-                float density = clusterCounts[c] / boundingVolume;
-                float midRatio = (float)clusterMidHeightPoints[c] / clusterCounts[c];
-
-                bool isHollowCabin = (size.Y > 1.8f && midRatio < 0.28f);
-                bool hasMachineryAspect = (size.X > 1.2f && size.Z > 1.0f && density < 450.0f);
-
-                if (isHollowCabin || (size.Y > 2.2f && hasMachineryAspect))
-                {
-                    isMachineryCluster[c] = true;
-                }
-            }
-
-            var result = new List<Point3D>(points.Count);
-            result.AddRange(floorPoints);
-
-            for (int i = 0; i < objectPoints.Count; i++)
-            {
-                var pt = objectPoints[i];
-                int c = clusterLabels[i];
-
-                byte cls = 1;
-                if (c >= 0 && isMachineryCluster[c])
-                {
-                    cls = 64;
-                }
-
-                result.Add(new Point3D(pt.X, pt.Y, pt.Z, pt.R, pt.G, pt.B, cls, pt.ReturnInfo));
-            }
-
-            return result;
-        }
-
         public static VolumeBalance CalculateVolumeBalance(List<Point3D> baseCloud, List<Point3D> currentCloud,
-                                                           float cellSize, BoundaryPolygon? aoi = null, bool filterMachinery = true, string? exportGridCsv = null)
+                                                           float cellSize, BoundaryPolygon? aoi, 
+                                                           float materialDensity, float bulkingFactor,
+                                                           bool filterMachinery = true, string? exportGridCsv = null)
         {
             if (baseCloud == null || currentCloud == null || baseCloud.Count == 0 || currentCloud.Count == 0)
-                return new VolumeBalance(0, 0, 0, 0, 0);
+                return new VolumeBalance(0, 0, 0, 0, 0, materialDensity, bulkingFactor, 0.0);
 
-            float minX = float.MaxValue, minZ = float.MaxValue;
-            float maxX = float.MinValue, maxZ = float.MinValue;
+            float minX = float.MaxValue, minY = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue;
 
             Action<List<Point3D>> findBounds = (cloud) =>
             {
@@ -394,8 +256,8 @@ namespace LidarProcessorMVP
                     var pt = cloud[i];
                     if (pt.X < minX) minX = pt.X;
                     if (pt.X > maxX) maxX = pt.X;
-                    if (pt.Z < minZ) minZ = pt.Z;
-                    if (pt.Z > maxZ) maxZ = pt.Z;
+                    if (pt.Y < minY) minY = pt.Y;
+                    if (pt.Y > maxY) maxY = pt.Y;
                 }
             };
 
@@ -403,10 +265,10 @@ namespace LidarProcessorMVP
             findBounds(currentCloud);
 
             int cols = (int)MathF.Ceiling((maxX - minX) / cellSize) + 1;
-            int rows = (int)MathF.Ceiling((maxZ - minZ) / cellSize) + 1;
+            int rows = (int)MathF.Ceiling((maxY - minY) / cellSize) + 1;
 
-            float[] baseGrid = BuildRobustDEM(baseCloud, cellSize, minX, minZ, cols, rows, filterMachinery);
-            float[] currentGrid = BuildRobustDEM(currentCloud, cellSize, minX, minZ, cols, rows, filterMachinery);
+            float[] baseGrid = BuildRobustDEM(baseCloud, cellSize, minX, minY, cols, rows, filterMachinery);
+            float[] currentGrid = BuildRobustDEM(currentCloud, cellSize, minX, minY, cols, rows, filterMachinery);
 
             InterpolateHoles(baseGrid, cols, rows);
             InterpolateHoles(currentGrid, cols, rows);
@@ -418,27 +280,28 @@ namespace LidarProcessorMVP
             double maxDepth = 0.0;
             double cellArea = cellSize * cellSize;
 
+            double sumSquaredErrors = 0.0;
+            int stableCount = 0;
+
             for (int r = 0; r < rows; r++)
             {
-                float cellCenterZ = minZ + (r + 0.5f) * cellSize;
+                float cellCenterY = minY + (r + 0.5f) * cellSize;
 
                 for (int c = 0; c < cols; c++)
                 {
                     float cellCenterX = minX + (c + 0.5f) * cellSize;
 
-                    if (aoi != null && !aoi.IsPointInside(cellCenterX, cellCenterZ))
-                    {
-                        continue;
-                    }
-
                     int idx = r * cols + c;
-                    float bH = baseGrid[idx];
-                    float cH = currentGrid[idx];
+                    float bZ = baseGrid[idx];
+                    float cZ = currentGrid[idx];
 
-                    if (bH > -9999.0f && cH > -9999.0f)
+                    if (bZ <= -9999.0f || cZ <= -9999.0f) continue;
+
+                    bool insideAOI = aoi == null || aoi.IsPointInside(cellCenterX, cellCenterY);
+                    float diff = bZ - cZ;
+
+                    if (insideAOI)
                     {
-                        float diff = bH - cH;
-
                         if (diff > 0.03f)
                         {
                             totalCut += diff * cellArea;
@@ -451,18 +314,26 @@ namespace LidarProcessorMVP
                             areaFill += cellArea;
                         }
                     }
+                    else
+                    {
+                        // Вне контура работ рельеф считается стабильным: оценка СКП взаимного высотного положения
+                        sumSquaredErrors += diff * diff;
+                        stableCount++;
+                    }
                 }
             }
 
+            double rmse = stableCount > 10 ? Math.Sqrt(sumSquaredErrors / stableCount) : 0.035;
+
             if (!string.IsNullOrEmpty(exportGridCsv))
             {
-                ReportGenerator.ExportVolumeGridCsv(exportGridCsv, baseGrid, currentGrid, minX, minZ, cellSize, cols, rows);
+                ReportGenerator.ExportVolumeGridCsv(exportGridCsv, baseGrid, currentGrid, minX, minY, cellSize, cols, rows);
             }
 
-            return new VolumeBalance(totalCut, totalFill, areaCut, areaFill, maxDepth);
+            return new VolumeBalance(totalCut, totalFill, areaCut, areaFill, maxDepth, materialDensity, bulkingFactor, rmse);
         }
 
-        private static float[] BuildRobustDEM(List<Point3D> points, float cellSize, float minX, float minZ, int cols, int rows, bool filterMachinery)
+        private static float[] BuildRobustDEM(List<Point3D> points, float cellSize, float minX, float minY, int cols, int rows, bool filterMachinery)
         {
             int totalCells = cols * rows;
             float[] grid = new float[totalCells];
@@ -474,14 +345,14 @@ namespace LidarProcessorMVP
                 if (filterMachinery && pt.Classification == 64) continue;
 
                 int c = (int)((pt.X - minX) / cellSize);
-                int r = (int)((pt.Z - minZ) / cellSize);
+                int r = (int)((pt.Y - minY) / cellSize);
 
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
-                    if (pt.Y > grid[idx])
+                    if (pt.Z > grid[idx])
                     {
-                        grid[idx] = pt.Y;
+                        grid[idx] = pt.Z;
                     }
                 }
             }
@@ -511,18 +382,17 @@ namespace LidarProcessorMVP
                         if (top > -9999.0f) { sum += top; count++; }
                         if (bottom > -9999.0f) { sum += bottom; count++; }
 
-                        if (count >= 2)
-                        {
-                            grid[idx] = sum / count;
-                        }
+                        if (count >= 2) grid[idx] = sum / count;
                     }
                 }
             }
         }
 
-        public static (Matrix4x4 Transform, float Error) AlignCloudsICP(List<Vector3> source, List<Vector3> target, int maxIterations = 8)
+        // ICP с защитным порогом RTK: предотвращает искажение геодезических данных
+        public static (Matrix4x4 Transform, float Error, bool IsReliable) AlignCloudsICP(
+            List<Vector3> source, List<Vector3> target, int maxIterations = 8, float maxAllowedShift = 0.35f)
         {
-            if (source.Count == 0 || target.Count == 0) return (Matrix4x4.Identity, 0);
+            if (source.Count == 0 || target.Count == 0) return (Matrix4x4.Identity, 0, false);
 
             var kdTree = new KdTreeFlat(target);
             Matrix4x4 globalTransform = Matrix4x4.Identity;
@@ -539,18 +409,18 @@ namespace LidarProcessorMVP
                     var sPt = currentSource[i];
                     var (bestPt, bestDistSq) = kdTree.FindNearest(sPt);
 
-                    if (bestDistSq < 15.0f)
+                    if (bestDistSq < 4.0f) // Поиск строго в радиусе 2 метров
                     {
                         pointPairs.Add((sPt, bestPt, bestDistSq));
                         distances.Add(bestDistSq);
                     }
                 }
 
-                if (pointPairs.Count < 20) break;
+                if (pointPairs.Count < 30) break;
 
                 distances.Sort();
                 float medianDistSq = distances[distances.Count / 2];
-                float cutoffThreshold = Math.Max(medianDistSq * 3.0f, 0.01f);
+                float cutoffThreshold = Math.Max(medianDistSq * 2.5f, 0.005f);
 
                 var matchedSource = new List<Vector3>(pointPairs.Count);
                 var matchedTarget = new List<Vector3>(pointPairs.Count);
@@ -568,7 +438,7 @@ namespace LidarProcessorMVP
                     }
                 }
 
-                if (keepCount < 20) break;
+                if (keepCount < 30) break;
                 currentError /= keepCount;
 
                 if (MathF.Abs(lastError - currentError) < 0.0001f) break;
@@ -589,7 +459,14 @@ namespace LidarProcessorMVP
                     currentSource[i] = Vector3.Transform(currentSource[i], stepTransform);
             }
 
-            return (globalTransform, lastError);
+            // Геодезический аудит: если сдвиг больше допустимого дрейфа RTK (35 см), сшивка бракуется
+            float totalShift = new Vector3(globalTransform.M41, globalTransform.M42, globalTransform.M43).Length();
+            if (totalShift > maxAllowedShift)
+            {
+                return (Matrix4x4.Identity, totalShift, false);
+            }
+
+            return (globalTransform, lastError, true);
         }
 
         private static (DenseMatrix Rotation, Vector3 Translation) CalculateRigidTransformationSVD(List<Vector3> src, List<Vector3> dst)
