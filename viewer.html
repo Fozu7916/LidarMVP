@@ -79,7 +79,7 @@
 </head>
 <body>
 
-    <div id="loading">Инициализация Octree LOD и синхронизация...</div>
+    <div id="loading">Синхронизация высокоплотных данных и Octree...</div>
 
     <div id="dashboard" style="display: none;">
         <h2>Баланс земляных масс</h2>
@@ -195,7 +195,7 @@
                     scene.add(epochGroup);
                     epochGroups.push(epochGroup);
 
-                    // Загрузка октантов Level 1 (без дублирования точек с превью LOD0)
+                    // Загрузка стабильных октантов Level 1
                     if (ep.Octree && ep.Octree.Nodes && ep.Octree.Nodes.length > 1) {
                         const octants = ep.Octree.Nodes.filter(n => n.Level === 1);
                         for (const node of octants) {
@@ -307,7 +307,8 @@
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-            return new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.045, vertexColors: true }));
+            // Размер точки адаптирован под плотное облако
+            return new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.035, vertexColors: true }));
         }
 
         function onWindowResize() {
