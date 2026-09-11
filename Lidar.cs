@@ -1,14 +1,16 @@
 ﻿using System;
 using System.Buffers.Binary;
 using System.Buffers.Text;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace LidarProcessorMVP
 {
+    // 16-байтовая компактная структура с поддержкой стандарта ASPRS LAS
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public readonly struct Point3D
     {
         public readonly float X;
@@ -17,11 +19,12 @@ namespace LidarProcessorMVP
         public readonly byte R;
         public readonly byte G;
         public readonly byte B;
+        public readonly byte Classification; // Стандарт ASPRS (2 - Ground, 1 - Default, 64 - Machinery/Object)
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public Point3D(float x, float y, float z, byte r, byte g, byte b)
+        public Point3D(float x, float y, float z, byte r, byte g, byte b, byte classification = 1)
         {
-            X = x; Y = y; Z = z; R = r; G = g; B = b;
+            X = x; Y = y; Z = z; R = r; G = g; B = b; Classification = classification;
         }
     }
 
@@ -50,7 +53,7 @@ namespace LidarProcessorMVP
 
             fs.Seek(96, SeekOrigin.Begin);
             uint offsetToPoints = br.ReadUInt32();
-            
+
             fs.Seek(104, SeekOrigin.Begin);
             byte pointFormat = br.ReadByte();
             ushort pointRecordLength = br.ReadUInt16();
@@ -71,10 +74,22 @@ namespace LidarProcessorMVP
                 totalPoints = (long)br.ReadUInt64();
             }
 
-            var points = new List<Point3D>((int)Math.Min(totalPoints, 5_000_000));
+            var points = new List<Point3D>((int)Math.Min(totalPoints, 10_000_000));
             fs.Seek(offsetToPoints, SeekOrigin.Begin);
 
             byte[] recordBuffer = new byte[pointRecordLength];
+
+            // Определение смещений классификации и RGB в зависимости от формата точки LAS
+            int classOffset = 15;
+            int rgbOffset = -1;
+
+            if (pointFormat == 2) { rgbOffset = 20; classOffset = 15; }
+            else if (pointFormat == 3) { rgbOffset = 28; classOffset = 15; }
+            else if (pointFormat >= 6 && pointFormat <= 10)
+            {
+                classOffset = 16; // В LAS 1.4 класс вынесен в отдельный полный байт
+                if (pointFormat == 7 || pointFormat == 8 || pointFormat == 10) rgbOffset = 30;
+            }
 
             for (long i = 0; i < totalPoints; i++)
             {
@@ -101,15 +116,14 @@ namespace LidarProcessorMVP
                 float localY = (float)(realY - GlobalOriginY);
                 float localZ = (float)(realZ - GlobalOriginZ);
 
+                byte classification = 1;
+                if (classOffset < pointRecordLength)
+                {
+                    classification = recordBuffer[classOffset];
+                    if (pointFormat < 6) classification = (byte)(classification & 0x1F); // Биты 0-4 в ранних форматах LAS
+                }
+
                 byte r = 200, g = 200, b = 200;
-                int rgbOffset = -1;
-
-                // Поддержка LAS 1.4 форматов (Point Format 6-10)
-                if (pointFormat == 2) rgbOffset = 20;
-                else if (pointFormat == 3) rgbOffset = 28;
-                else if (pointFormat == 7 || pointFormat == 8) rgbOffset = 30;
-                else if (pointFormat == 9 || pointFormat == 10) rgbOffset = 30; // Экстра-байты начинаются дальше, но RGB на 30
-
                 if (rgbOffset > 0 && rgbOffset + 6 <= pointRecordLength)
                 {
                     ushort rawR = BinaryPrimitives.ReadUInt16LittleEndian(recordBuffer.AsSpan(rgbOffset, 2));
@@ -120,7 +134,8 @@ namespace LidarProcessorMVP
                     b = (byte)(rawB >> 8);
                 }
 
-                points.Add(new Point3D(localX, localZ, localY, r, g, b)); 
+                // Внутренняя система координат: X вправо, Y вверх (высота Z файла), Z вперед (Y файла)
+                points.Add(new Point3D(localX, localZ, localY, r, g, b, classification));
             }
 
             return points;
@@ -128,7 +143,6 @@ namespace LidarProcessorMVP
 
         public static List<Point3D> FastLoadPlyFile(string path)
         {
-            // Оставлено без изменений (логика парсинга PLY оптимальна)
             const int BufferSize = 1024 * 1024;
             var points = new List<Point3D>(128000);
 
@@ -190,7 +204,7 @@ namespace LidarProcessorMVP
                     if (SkipWhitespaces(line, ref offset) && Utf8Parser.TryParse(line.Slice(offset), out byte pb, out c)) b = pb;
                 }
             }
-            point = new Point3D(x, y, z, r, g, b);
+            point = new Point3D(x, y, z, r, g, b, 1);
             return true;
         }
 
@@ -201,23 +215,42 @@ namespace LidarProcessorMVP
             return offset < span.Length;
         }
 
+        // Высокоскоростная вокселизация без ссылочных аллокаций (GC-Free Voxel Sort)
         public static List<Point3D> VoxelFilter(List<Point3D> points, float leafSize)
         {
-            if (leafSize <= 0.0f) return points;
+            if (leafSize <= 0.0f || points.Count == 0) return points;
+
             float invLeaf = 1.0f / leafSize;
-            var voxelMap = new ConcurrentDictionary<long, Point3D>(Environment.ProcessorCount * 2, points.Count);
+            int count = points.Count;
 
-            Parallel.ForEach(points, pt =>
+            var items = new (long Key, int Index)[count];
+
+            Parallel.For(0, count, i =>
             {
-                int vx = (int)MathF.Floor(pt.X * invLeaf);
-                int vy = (int)MathF.Floor(pt.Y * invLeaf);
-                int vz = (int)MathF.Floor(pt.Z * invLeaf);
+                var pt = points[i];
+                long vx = (int)MathF.Floor(pt.X * invLeaf);
+                long vy = (int)MathF.Floor(pt.Y * invLeaf);
+                long vz = (int)MathF.Floor(pt.Z * invLeaf);
 
-                long key = ((long)(vx & 0x1FFFFF) << 42) | ((long)(vy & 0x1FFFFF) << 21) | ((long)(vz & 0x1FFFFF));
-                voxelMap.TryAdd(key, pt);
+                long key = ((vx & 0x1FFFFF) << 42) | ((vy & 0x1FFFFF) << 21) | (vz & 0x1FFFFF);
+                items[i] = (key, i);
             });
 
-            return new List<Point3D>(voxelMap.Values);
+            Array.Sort(items, (a, b) => a.Key.CompareTo(b.Key));
+
+            var result = new List<Point3D>(count / 2);
+            long prevKey = long.MinValue;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (items[i].Key != prevKey)
+                {
+                    result.Add(points[items[i].Index]);
+                    prevKey = items[i].Key;
+                }
+            }
+
+            return result;
         }
 
         public static void ExportToBinary(List<Point3D> points, string outputPath)
@@ -240,7 +273,7 @@ namespace LidarProcessorMVP
                     buffer[offset + 12] = pt.R;
                     buffer[offset + 13] = pt.G;
                     buffer[offset + 14] = pt.B;
-                    buffer[offset + 15] = 255;
+                    buffer[offset + 15] = pt.Classification;
                     offset += 16;
                 }
                 fs.Write(buffer, 0, offset);

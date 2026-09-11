@@ -2,85 +2,89 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Лидар-БИМ: 4D Мониторинг Выработки и Складов</title>
+    <title>Лидар-БИМ: Маркшейдерский контроль выработки (ASPRS)</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #0d1117; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #fff; }
+        body { margin: 0; overflow: hidden; background-color: #0b0f14; font-family: 'Segoe UI', sans-serif; color: #fff; }
         
         #dashboard {
             position: absolute; top: 20px; left: 20px; width: 380px;
-            background: rgba(18, 24, 33, 0.94); border: 1px solid #2d3748; border-radius: 10px;
-            padding: 22px 20px; box-shadow: 0 12px 35px rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+            background: rgba(14, 20, 27, 0.94); border: 1px solid #2d3748; border-radius: 8px;
+            padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); backdrop-filter: blur(6px);
             z-index: 10;
         }
         
-        h2 { margin: 0 0 16px 0; font-size: 15px; color: #58a6ff; text-transform: uppercase; border-bottom: 1px solid #30363d; padding-bottom: 12px; letter-spacing: 1px; }
+        h2 { margin: 0 0 14px 0; font-size: 14px; color: #58a6ff; text-transform: uppercase; border-bottom: 1px solid #2d3748; padding-bottom: 10px; }
         
         .scene-badge {
             display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px;
-            font-weight: bold; background: #238636; color: #fff; margin-bottom: 15px; text-transform: uppercase;
+            font-weight: bold; background: #238636; color: #fff; margin-bottom: 14px; text-transform: uppercase;
         }
 
-        .metric { margin-bottom: 18px; padding: 14px; background: rgba(56, 139, 253, 0.1); border-left: 4px solid #58a6ff; border-radius: 4px; }
-        .metric-label { font-size: 12px; color: #8b949e; text-transform: uppercase; font-weight: bold; margin-bottom: 6px; }
-        .metric-value { font-size: 30px; font-weight: bold; color: #58a6ff; text-shadow: 0 0 12px rgba(88, 166, 255, 0.3); }
-        .metric-value span { font-size: 15px; color: #8b949e; font-weight: normal; }
-        
-        .stage-desc {
-            font-size: 12px; color: #c9d1d9; background: #161b22; padding: 10px;
-            border-radius: 6px; border: 1px solid #30363d; margin-bottom: 15px; min-height: 42px; line-height: 1.4;
+        .metrics-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;
         }
 
-        .controls-title { font-size: 12px; text-transform: uppercase; color: #8b949e; margin-bottom: 8px; font-weight: bold; }
-        .controls { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; padding-right: 4px; }
-        
-        .controls::-webkit-scrollbar { width: 6px; }
-        .controls::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+        .metric-card {
+            padding: 10px; border-radius: 4px; background: #161b22; border: 1px solid #30363d;
+        }
+
+        .metric-card.cut { border-left: 3px solid #2ea043; }
+        .metric-card.fill { border-left: 3px solid #da3633; }
+        .metric-card.net { grid-column: span 2; border-left: 3px solid #58a6ff; }
+
+        .metric-label { font-size: 11px; color: #8b949e; text-transform: uppercase; font-weight: bold; margin-bottom: 4px; }
+        .metric-value { font-size: 20px; font-weight: bold; color: #fff; }
+        .metric-value.cut { color: #3fb950; }
+        .metric-value.fill { color: #f85149; }
+        .metric-value.net { color: #58a6ff; font-size: 24px; }
+        .metric-value span { font-size: 13px; color: #8b949e; font-weight: normal; }
+
+        .controls-title { font-size: 11px; text-transform: uppercase; color: #8b949e; margin: 14px 0 8px 0; font-weight: bold; }
+        .controls { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
 
         button {
             padding: 10px 12px; background: #21262d; border: 1px solid #30363d; text-align: left;
-            color: #c9d1d9; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px;
-            transition: all 0.2s ease; display: flex; flex-direction: column; gap: 4px;
+            color: #c9d1d9; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 12px;
+            transition: all 0.2s ease; display: flex; justify-content: space-between; align-items: center;
         }
         button:hover { background: #30363d; border-color: #8b949e; }
-        button.active { background: #1f6feb; color: #fff; border-color: #58a6ff; box-shadow: 0 0 14px rgba(31, 111, 235, 0.4); }
-        
-        .btn-header { display: flex; justify-content: space-between; width: 100%; align-items: center; }
+        button.active { background: #1f6feb; color: #fff; border-color: #58a6ff; box-shadow: 0 0 12px rgba(31, 111, 235, 0.4); }
+
         .btn-badge { font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold; background: #30363d; }
-        button.active .btn-badge { background: #0d1117; color: #58a6ff; }
-        
-        .badge-raw { background: #d29922; color: #000; }
-        .badge-base { background: #238636; color: #fff; }
-        .badge-step { background: #8957e5; color: #fff; }
+        button.active .btn-badge { background: #0b0f14; color: #58a6ff; }
 
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 16px; background: rgba(13, 17, 23, 0.9); padding: 24px 40px;
-            border-radius: 8px; border: 1px solid #58a6ff; z-index: 100;
-            box-shadow: 0 0 25px rgba(88, 166, 255, 0.25); text-align: center;
+            font-size: 16px; background: rgba(14, 20, 27, 0.95); padding: 20px 40px;
+            border-radius: 8px; border: 1px solid #58a6ff; z-index: 100; text-align: center;
         }
     </style>
 </head>
 <body>
 
-    <div id="loading">Загрузка облаков точек и синхронизация...</div>
+    <div id="loading">Синхронизация маркшейдерских данных...</div>
 
     <div id="dashboard" style="display: none;">
-        <h2>4D Мониторинг Объекта</h2>
-        <div id="scene-type-badge" class="scene-badge">Карьер / Куча</div>
-        
-        <div class="metric">
-            <div class="metric-label" id="metric-title">Объем извлечения / уборки</div>
-            <div class="metric-value" id="val-extracted-total">0.00 <span>м³</span></div>
+        <h2>Баланс земляных масс</h2>
+        <div id="scene-type-badge" class="scene-badge">Карьер / Насыпь</div>
+
+        <div class="metrics-grid">
+            <div class="metric-card cut">
+                <div class="metric-label">Выемка (Cut)</div>
+                <div class="metric-value cut" id="val-cut">+0.00 <span>м³</span></div>
+            </div>
+            <div class="metric-card fill">
+                <div class="metric-label">Насыпь (Fill)</div>
+                <div class="metric-value fill" id="val-fill">-0.00 <span>м³</span></div>
+            </div>
+            <div class="metric-card net">
+                <div class="metric-label">Чистый Баланс (Net Volume)</div>
+                <div class="metric-value net" id="val-net">0.00 <span>м³</span></div>
+            </div>
         </div>
 
-        <div class="stage-desc" id="stage-description">
-            Описание выбранного этапа...
-        </div>
-
-        <div class="controls-title">Технологические Этапы:</div>
-        <div class="controls" id="btn-container">
-            <!-- Кнопки генерируются динамически -->
-        </div>
+        <div class="controls-title">Эпохи мониторинга:</div>
+        <div class="controls" id="btn-container"></div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -89,14 +93,14 @@
     <script>
         let scene, camera, renderer, controls;
         let epochsData = [];
-        let pointClouds = []; 
+        let pointClouds = [];
 
         init();
         loadData();
 
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0e14);
+            scene.background = new THREE.Color(0x080b0f);
 
             camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(22, 18, 22);
@@ -117,81 +121,89 @@
             animate();
         }
 
+        function safeNum(val) {
+            const num = Number(val);
+            return Number.isFinite(num) ? num : 0.0;
+        }
+
+        function formatM3(val, forceSign = false) {
+            const num = safeNum(val);
+            const prefix = (forceSign && num > 0) ? '+' : '';
+            return `${prefix}${num.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
         async function loadData() {
             try {
                 const metaResponse = await fetch('meta.json');
-                if (!metaResponse.ok) throw new Error("Файл meta.json не найден. Сначала выполните обработку в CLI.");
+                if (!metaResponse.ok) throw new Error("meta.json не найден. Сначала выполните расчет в CLI (пункт 5).");
                 const metaJson = await metaResponse.json();
-                epochsData = metaJson.Epochs;
+                epochsData = metaJson.Epochs || [];
+
+                if (epochsData.length === 0) {
+                    throw new Error("В meta.json нет данных по эпохам.");
+                }
 
                 const sceneBadge = document.getElementById('scene-type-badge');
                 if (metaJson.Scene === "Warehouse") {
-                    sceneBadge.innerText = "Склад материалов и паллет";
+                    sceneBadge.innerText = "Склад / Логистический хаб";
                     sceneBadge.style.background = "#8957e5";
-                    document.getElementById('metric-title').innerText = "Объем освобожденного пространства";
                 } else if (metaJson.Scene === "Crater") {
-                    sceneBadge.innerText = "Котлован / Кратер выемки";
+                    sceneBadge.innerText = "Котлован выемки грунта";
                     sceneBadge.style.background = "#d29922";
-                    document.getElementById('metric-title').innerText = "Объем выемки грунта";
                 } else {
-                    sceneBadge.innerText = "Карьер / Насыпная куча";
+                    sceneBadge.innerText = "Карьер / Породный отвал";
                     sceneBadge.style.background = "#238636";
-                    document.getElementById('metric-title').innerText = "Объем извлеченной породы";
                 }
 
                 const btnContainer = document.getElementById('btn-container');
+                btnContainer.innerHTML = '';
 
-                const fetchPromises = epochsData.map(ep => fetch(ep.BinFile).then(res => res.arrayBuffer()));
+                const fetchPromises = epochsData.map(ep => fetch(ep.BinFile).then(res => {
+                    if (!res.ok) throw new Error(`Не удалось загрузить бинарный скан: ${ep.BinFile}`);
+                    return res.arrayBuffer();
+                }));
+
                 const buffers = await Promise.all(fetchPromises);
 
                 for (let i = 0; i < epochsData.length; i++) {
                     const ep = epochsData[i];
-                    
                     const cloud = createPointCloud(buffers[i]);
-                    cloud.visible = (i === 1); // По умолчанию открываем Этап 2 (Базис)
+                    cloud.visible = (i === 1 || (epochsData.length === 1 && i === 0));
                     scene.add(cloud);
                     pointClouds.push(cloud);
 
                     const btn = document.createElement('button');
-                    
-                    const headerDiv = document.createElement('div');
-                    headerDiv.className = 'btn-header';
-                    
                     const titleSpan = document.createElement('span');
-                    titleSpan.innerText = ep.Title;
+                    titleSpan.innerText = ep.Title || `Эпоха ${ep.Id ?? i}`;
+
+                    const netVal = safeNum(ep.NetVolume ?? ep.ExtractedTotal);
 
                     const badgeSpan = document.createElement('span');
                     badgeSpan.className = 'btn-badge';
-
                     if (ep.StageType === 'RAW_SCAN') {
-                        badgeSpan.classList.add('badge-raw');
-                        badgeSpan.innerText = "С ТЕХНИКОЙ";
-                    } else if (ep.StageType === 'CLEANED_BASE') {
-                        badgeSpan.classList.add('badge-base');
-                        badgeSpan.innerText = "БАЗИС (0.0 м³)";
+                        badgeSpan.innerText = "ТЕХНИКА В ЗОНЕ";
+                    } else if (ep.StageType === 'CLEANED_BASE' || i === 1) {
+                        badgeSpan.innerText = "БАЗИС";
                     } else {
-                        badgeSpan.classList.add('badge-step');
-                        badgeSpan.innerText = `+${ep.ExtractedTotal.toLocaleString('ru-RU')} м³`;
+                        badgeSpan.innerText = `${formatM3(netVal, true)} м³`;
                     }
 
-                    headerDiv.appendChild(titleSpan);
-                    headerDiv.appendChild(badgeSpan);
-                    btn.appendChild(headerDiv);
+                    btn.appendChild(titleSpan);
+                    btn.appendChild(badgeSpan);
 
-                    if (i === 1) btn.classList.add('active');
-                    
                     btn.onclick = () => selectEpoch(i, btn);
                     btnContainer.appendChild(btn);
                 }
 
+                const targetIdx = (pointClouds.length > 1) ? 1 : 0;
                 if (pointClouds.length > 0) {
-                    const initialIdx = pointClouds.length > 1 ? 1 : 0;
-                    pointClouds[initialIdx].geometry.computeBoundingSphere();
-                    const center = pointClouds[initialIdx].geometry.boundingSphere.center;
+                    pointClouds[targetIdx].geometry.computeBoundingSphere();
+                    const center = pointClouds[targetIdx].geometry.boundingSphere.center;
                     controls.target.copy(center);
                     controls.update();
-                    
-                    selectEpoch(initialIdx, btnContainer.children[initialIdx]); 
+
+                    const initialBtn = btnContainer.children[targetIdx];
+                    if (initialBtn) selectEpoch(targetIdx, initialBtn);
                 }
 
                 document.getElementById('loading').style.display = 'none';
@@ -209,24 +221,27 @@
             }
 
             const buttons = document.getElementById('btn-container').children;
-            for (let i = 0; i < buttons.length; i++) {
-                buttons[i].classList.remove('active');
-            }
-            btnElement.classList.add('active');
+            for (let i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
+            if (btnElement) btnElement.classList.add('active');
 
-            const ep = epochsData[index];
-            document.getElementById('val-extracted-total').innerHTML = `${ep.ExtractedTotal.toLocaleString('ru-RU')} <span>м³</span>`;
-            document.getElementById('stage-description').innerText = ep.Description;
+            const ep = epochsData[index] || {};
+            const cutVal = safeNum(ep.CutVolume ?? ep.ExtractedTotal);
+            const fillVal = safeNum(ep.FillVolume);
+            const netVal = safeNum(ep.NetVolume ?? ep.ExtractedTotal);
+
+            document.getElementById('val-cut').innerHTML = `${formatM3(cutVal, true)} <span>м³</span>`;
+            document.getElementById('val-fill').innerHTML = `-${formatM3(fillVal)} <span>м³</span>`;
+            document.getElementById('val-net').innerHTML = `${formatM3(netVal, true)} <span>м³</span>`;
         }
 
         function createPointCloud(buffer) {
             const POINT_STRIDE = 16;
             const numPoints = Math.floor(buffer.byteLength / POINT_STRIDE);
-            
+
             const positions = new Float32Array(numPoints * 3);
             const colors = new Float32Array(numPoints * 3);
             const dataView = new DataView(buffer);
-            
+
             let byteOffset = 0, pIdx = 0;
 
             for (let i = 0; i < numPoints; i++) {

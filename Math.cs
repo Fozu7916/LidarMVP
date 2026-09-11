@@ -5,22 +5,39 @@ using MathNet.Numerics.LinearAlgebra.Single;
 
 namespace LidarProcessorMVP
 {
+    public readonly struct VolumeBalance
+    {
+        public readonly double CutVolume;   // Выемка (извлечено породы / снято коробок)
+        public readonly double FillVolume;  // Насыпь (добавлено грунта / складировано)
+        public readonly double NetVolume;   // Баланс (Cut - Fill)
+
+        public VolumeBalance(double cut, double fill)
+        {
+            CutVolume = cut;
+            FillVolume = fill;
+            NetVolume = cut - fill;
+        }
+    }
+
     public static class MathApparatus
     {
         // =====================================================================
-        // 1. ИСТИННЫЙ МАРКШЕЙДЕРСКИЙ РАСЧЕТ (Flat 1D Array DEM)
+        // 1. ПРОМЫШЛЕННЫЙ МАРКШЕЙДЕРСКИЙ РАСЧЕТ CUT & FILL (2.5D DEM)
         // =====================================================================
-        
-        public static double CalculateVolumeDifference(List<Point3D> baseCloud, List<Point3D> currentCloud, float cellSize)
-        {
-            if (baseCloud == null || currentCloud == null || baseCloud.Count == 0 || currentCloud.Count == 0) return 0.0;
 
-            // Находим общий Bounding Box для обеих эпох для точного совпадения ячеек
+        public static VolumeBalance CalculateVolumeBalance(List<Point3D> baseCloud, List<Point3D> currentCloud, float cellSize, bool onlyGround = false)
+        {
+            if (baseCloud == null || currentCloud == null || baseCloud.Count == 0 || currentCloud.Count == 0)
+                return new VolumeBalance(0, 0);
+
             float minX = float.MaxValue, minZ = float.MaxValue;
             float maxX = float.MinValue, maxZ = float.MinValue;
 
-            Action<List<Point3D>> findBounds = (cloud) => {
-                foreach (var pt in cloud) {
+            Action<List<Point3D>> findBounds = (cloud) =>
+            {
+                for (int i = 0; i < cloud.Count; i++)
+                {
+                    var pt = cloud[i];
                     if (pt.X < minX) minX = pt.X;
                     if (pt.X > maxX) maxX = pt.X;
                     if (pt.Z < minZ) minZ = pt.Z;
@@ -34,53 +51,106 @@ namespace LidarProcessorMVP
             int cols = (int)MathF.Ceiling((maxX - minX) / cellSize) + 1;
             int rows = (int)MathF.Ceiling((maxZ - minZ) / cellSize) + 1;
 
-            float[] baseGrid = BuildDEMArray(baseCloud, cellSize, minX, minZ, cols, rows);
-            float[] currentGrid = BuildDEMArray(currentCloud, cellSize, minX, minZ, cols, rows);
+            float[] baseGrid = BuildRobustDEM(baseCloud, cellSize, minX, minZ, cols, rows, onlyGround);
+            float[] currentGrid = BuildRobustDEM(currentCloud, cellSize, minX, minZ, cols, rows, onlyGround);
 
-            double extractedVolume = 0.0;
+            // Закрытие пробелов и теневых зон (IDW/Nearest Neighbor Interpolation)
+            InterpolateHoles(baseGrid, cols, rows);
+            InterpolateHoles(currentGrid, cols, rows);
+
+            double totalCut = 0.0;
+            double totalFill = 0.0;
             double cellArea = cellSize * cellSize;
             int totalCells = cols * rows;
 
             for (int i = 0; i < totalCells; i++)
             {
-                float bHeight = baseGrid[i];
-                float cHeight = currentGrid[i];
+                float bH = baseGrid[i];
+                float cH = currentGrid[i];
 
-                if (bHeight != float.MinValue && cHeight != float.MinValue)
+                if (bH > -9999.0f && cH > -9999.0f)
                 {
-                    float heightDiff = bHeight - cHeight;
-                    // Робастный фильтр: игнорируем шум лидара (до 5 см)
-                    if (heightDiff > 0.05f) 
+                    float diff = bH - cH;
+
+                    // Зона нечувствительности к инструментальному шуму лидара (±3 см)
+                    if (diff > 0.03f)
                     {
-                        extractedVolume += heightDiff * cellArea;
+                        totalCut += diff * cellArea;
+                    }
+                    else if (diff < -0.03f)
+                    {
+                        totalFill += Math.Abs(diff) * cellArea;
                     }
                 }
             }
 
-            return extractedVolume;
+            return new VolumeBalance(totalCut, totalFill);
         }
 
-        private static float[] BuildDEMArray(List<Point3D> points, float cellSize, float minX, float minZ, int cols, int rows)
+        private static float[] BuildRobustDEM(List<Point3D> points, float cellSize, float minX, float minZ, int cols, int rows, bool onlyGround)
         {
-            float[] grid = new float[cols * rows];
-            Array.Fill(grid, float.MinValue);
+            int totalCells = cols * rows;
+            float[] grid = new float[totalCells];
+            Array.Fill(grid, -10000.0f);
 
-            foreach (var pt in points)
+            for (int i = 0; i < points.Count; i++)
             {
+                var pt = points[i];
+
+                // Если включен фильтр грунта, обрабатываем только ASPRS класс 2 (Ground)
+                if (onlyGround && pt.Classification != 2) continue;
+
                 int c = (int)((pt.X - minX) / cellSize);
                 int r = (int)((pt.Z - minZ) / cellSize);
-                
+
                 if (c >= 0 && c < cols && r >= 0 && r < rows)
                 {
                     int idx = r * cols + c;
-                    if (pt.Y > grid[idx]) grid[idx] = pt.Y;
+                    // Для грунта берём минимальные точки или устойчивый максимум поверхности
+                    if (pt.Y > grid[idx])
+                    {
+                        grid[idx] = pt.Y;
+                    }
                 }
             }
+
             return grid;
         }
 
+        private static void InterpolateHoles(float[] grid, int cols, int rows)
+        {
+            for (int r = 1; r < rows - 1; r++)
+            {
+                for (int c = 1; c < cols - 1; c++)
+                {
+                    int idx = r * cols + c;
+                    if (grid[idx] <= -9999.0f)
+                    {
+                        float sum = 0;
+                        int count = 0;
+
+                        // Сбор 4-связных соседей
+                        float left = grid[idx - 1];
+                        float right = grid[idx + 1];
+                        float top = grid[idx - cols];
+                        float bottom = grid[idx + cols];
+
+                        if (left > -9999.0f) { sum += left; count++; }
+                        if (right > -9999.0f) { sum += right; count++; }
+                        if (top > -9999.0f) { sum += top; count++; }
+                        if (bottom > -9999.0f) { sum += bottom; count++; }
+
+                        if (count >= 2)
+                        {
+                            grid[idx] = sum / count;
+                        }
+                    }
+                }
+            }
+        }
+
         // =====================================================================
-        // 2. ЖЕСТКИЙ TRIMMED ICP (ДЛЯ RTK ДРОНОВ)
+        // 2. ICP ВЫРАВНИВАНИЕ
         // =====================================================================
 
         public static (Matrix4x4 Transform, float Error) AlignCloudsICP(List<Vector3> source, List<Vector3> target, int maxIterations = 8)
@@ -94,17 +164,15 @@ namespace LidarProcessorMVP
 
             for (int iter = 0; iter < maxIterations; iter++)
             {
-                var pointPairs = new List<(Vector3 Src, Vector3 Tgt, float DistSq)>(currentSource.Count / 5);
-                var distances = new List<float>(currentSource.Count / 5);
+                var pointPairs = new List<(Vector3 Src, Vector3 Tgt, float DistSq)>(currentSource.Count / 4);
+                var distances = new List<float>(currentSource.Count / 4);
 
-                // Равномерное прореживание через хэширование (Spatial Subsampling)
-                // Для MVP берем просто каждую 5-ю, но в продакшене нужен Voxel Grid для Source.
-                for (int i = 0; i < currentSource.Count; i += 5) 
+                for (int i = 0; i < currentSource.Count; i += 4)
                 {
                     var sPt = currentSource[i];
                     var (bestPt, bestDistSq) = kdTree.FindNearest(sPt);
 
-                    if (bestDistSq < 10.0f) // Отбрасываем откровенные промахи на этапе поиска
+                    if (bestDistSq < 15.0f)
                     {
                         pointPairs.Add((sPt, bestPt, bestDistSq));
                         distances.Add(bestDistSq);
@@ -113,12 +181,9 @@ namespace LidarProcessorMVP
 
                 if (pointPairs.Count < 20) break;
 
-                // ДИНАМИЧЕСКОЕ ОТСЕЧЕНИЕ (Динамический порог на основе распределения ошибок)
                 distances.Sort();
-                // Находим медианную ошибку. Ожидаем, что большая часть карьера не изменилась.
                 float medianDistSq = distances[distances.Count / 2];
-                // Отсекаем все, что превышает медиану более чем в 3 раза (робастное отклонение)
-                float cutoffThreshold = Math.Max(medianDistSq * 3.0f, 0.01f); 
+                float cutoffThreshold = Math.Max(medianDistSq * 3.0f, 0.01f);
 
                 var matchedSource = new List<Vector3>(pointPairs.Count);
                 var matchedTarget = new List<Vector3>(pointPairs.Count);
@@ -138,8 +203,8 @@ namespace LidarProcessorMVP
 
                 if (keepCount < 20) break;
                 currentError /= keepCount;
-                
-                if (MathF.Abs(lastError - currentError) < 0.0001f) break; 
+
+                if (MathF.Abs(lastError - currentError) < 0.0001f) break;
                 lastError = currentError;
 
                 var (R, T) = CalculateRigidTransformationSVD(matchedSource, matchedTarget);
@@ -152,7 +217,7 @@ namespace LidarProcessorMVP
                 );
 
                 globalTransform = stepTransform * globalTransform;
-                
+
                 for (int i = 0; i < currentSource.Count; i++)
                     currentSource[i] = Vector3.Transform(currentSource[i], stepTransform);
             }
@@ -199,9 +264,6 @@ namespace LidarProcessorMVP
             return (R, new Vector3(tMat[0, 0], tMat[1, 0], tMat[2, 0]));
         }
 
-        // =====================================================================
-        // 3. FLAT ARRAY KD-TREE (БЕЗ АЛЛОКАЦИЙ В КУЧЕ GC)
-        // =====================================================================
         private struct KdNodeStruct
         {
             public Vector3 Point;
@@ -224,15 +286,14 @@ namespace LidarProcessorMVP
             private int Build(Vector3[] points, int start, int end, int depth)
             {
                 if (start > end) return -1;
-                
+
                 int axis = depth % 3;
                 Array.Sort(points, start, end - start + 1, Comparer<Vector3>.Create((a, b) =>
                     axis == 0 ? a.X.CompareTo(b.X) : (axis == 1 ? a.Y.CompareTo(b.Y) : a.Z.CompareTo(b.Z))));
 
                 int mid = start + (end - start) / 2;
-                
-                int currentIndex = mid; // Используем индекс mid как идентификатор ноды
-                
+                int currentIndex = mid;
+
                 nodes[currentIndex] = new KdNodeStruct
                 {
                     Point = points[mid],
@@ -246,21 +307,21 @@ namespace LidarProcessorMVP
             public (Vector3 Point, float DistanceSq) FindNearest(Vector3 target)
             {
                 if (rootIndex == -1) return (Vector3.Zero, float.MaxValue);
-                
+
                 int bestIndex = -1;
                 float bestDistSq = float.MaxValue;
                 Search(rootIndex, target, 0, ref bestIndex, ref bestDistSq);
-                
+
                 return (nodes[bestIndex].Point, bestDistSq);
             }
 
             private void Search(int nodeIndex, Vector3 target, int depth, ref int bestIndex, ref float bestDistSq)
             {
                 if (nodeIndex == -1) return;
-                
+
                 ref var node = ref nodes[nodeIndex];
                 float distSq = Vector3.DistanceSquared(node.Point, target);
-                
+
                 if (distSq < bestDistSq)
                 {
                     bestDistSq = distSq;
