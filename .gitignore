@@ -1,15 +1,26 @@
 # Сборка .NET
 [Bb]in/
 [Oo]bj/
+.verify/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 
-# Результаты работы Лидар-БИМ (сгенерированные мастер-карты и кэш)
+# Результаты обработки
+results/
+DroneLiDAR/
 *.xyz
 *.ply
 *.csv
+*.las
+*.laz
+*.bin
+meta.json
+manifest.json
+project.json
+boundary.json
+report.html
 
 
 # Системные файлы и ОС

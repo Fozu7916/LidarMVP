@@ -1,0 +1,14 @@
+DroneLiDAR — уведомления о сторонних компонентах
+
+Altemiq.IO.Las 1.5.0
+Altemiq.IO.Las.Compression 1.5.0
+Назначение: чтение LAS и потоковое декодирование/кодирование LAZ.
+Лицензия: MIT
+Исходный код: https://github.com/altemiq/las
+
+MathNet.Numerics 5.0.0
+Назначение: численные методы.
+Лицензия: MIT
+Исходный код: https://github.com/mathnet/mathnet-numerics
+
+Тексты лицензий и уведомления JavaScript-компонентов находятся в каталоге web.

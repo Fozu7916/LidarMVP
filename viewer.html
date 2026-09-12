@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Газпром-Аудит: Мониторинг земляных работ (DJI L2 + Octree LOD)</title>
+    <title>DroneLiDAR — мониторинг земляных масс</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #0a0e14; font-family: 'Segoe UI', Tahoma, sans-serif; color: #fff; }
         
@@ -40,7 +40,9 @@
         .secondary-metrics span b { color: #c9d1d9; }
 
         .controls-title { font-size: 10px; text-transform: uppercase; color: #8b949e; margin: 10px 0 6px 0; font-weight: bold; }
-        .controls { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+        .controls { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
+        .epoch-row { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .epoch-label { grid-column: span 2; font-size: 10px; color: #8b949e; margin-top: 3px; }
 
         button {
             padding: 8px 10px; background: #1c2430; border: 1px solid #2d3b4e; text-align: left;
@@ -49,6 +51,8 @@
         }
         button:hover { background: #283344; }
         button.active { background: #1f6feb; color: #fff; border-color: #58a6ff; }
+        button.raw { border-left: 3px solid #d29922; }
+        button.clean { border-left: 3px solid #2ea043; }
 
         .btn-badge { font-size: 9px; padding: 2px 5px; border-radius: 3px; font-weight: bold; background: #283344; }
         button.active .btn-badge { background: #0a0e14; color: #58a6ff; }
@@ -64,17 +68,36 @@
             font-size: 14px; background: rgba(13, 19, 28, 0.95); padding: 15px 30px;
             border-radius: 6px; border: 1px solid #58a6ff; z-index: 100;
         }
+        #background-switch, #quality-switch {
+            position: absolute; top: 20px; right: 20px; z-index: 20;
+            display: flex; gap: 4px; padding: 4px;
+            background: rgba(13, 19, 28, 0.94); border: 1px solid #39475a;
+            border-radius: 7px; box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+        }
+        #quality-switch { top: 62px; }
+        #background-switch button, #quality-switch button {
+            padding: 7px 11px; min-width: 82px; justify-content: center;
+            border-left-width: 1px; font-size: 11px;
+        }
     </style>
 </head>
 <body>
 
     <div id="loading">Синхронизация геодезических данных...</div>
+    <div id="background-switch" aria-label="Фон сцены">
+        <button id="theme-dark" type="button">Тёмный фон</button>
+        <button id="theme-light" type="button">Светлый фон</button>
+    </div>
+    <div id="quality-switch" aria-label="Качество визуализации">
+        <button id="quality-overview" type="button">Быстрый обзор</button>
+        <button id="quality-full" type="button" title="Загружает все точки выбранного слота">Все точки</button>
+    </div>
 
     <div id="dashboard" style="display: none;">
         <h2>Оперативный маркшейдерский контроль</h2>
         <div class="badge-row">
             <div id="scene-type-badge" class="badge scene-badge">Карьер / Выемка</div>
-            <div class="badge lod-badge">Zenmuse L2 (ASPRS)</div>
+            <div class="badge lod-badge">LiDAR · LAS/LAZ 1.2–1.4</div>
         </div>
 
         <div class="metrics-grid">
@@ -94,23 +117,37 @@
 
         <div class="secondary-metrics">
             <span>Площадь: <b id="val-area">0.0</b> м²</span>
-            <span>СКП рельефа: <b id="val-rmse">±0.000</b> м</span>
+            <span>RMS стабильной зоны: <b id="val-rmse">не оценено</b></span>
+        </div>
+        <div class="secondary-metrics">
+            <span>Покрытие DEM: <b id="val-coverage">0.0</b>%</span>
+            <span>Удалено: <b id="val-removed">0</b> точек</span>
+        </div>
+        <div class="secondary-metrics">
+            <span>Отрисовано: <b id="val-rendered">0 / 0</b></span>
+            <span><b id="val-render-percent">0,0%</b> выбранного слота</span>
         </div>
 
         <div class="controls-title">Эпохи БПЛА-мониторинга:</div>
         <div class="controls" id="btn-container"></div>
 
-        <button class="btn-report" onclick="window.open('report.html', '_blank')">Сформировать акт по форме РД 07-603-03</button>
+        <button class="btn-report" onclick="window.open('report.html', '_blank')">Открыть маркшейдерский протокол</button>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="web/three.min.js"></script>
+    <script src="web/OrbitControls.js"></script>
 
-    <script>
+    <script nonce="dronelidar-viewer">
         let scene, camera, renderer, controls;
         let epochsData = [];
-        let epochGroups = []; 
+        let viewItems = [];
+        let viewGroups = [];
         let boundaryLine = null;
+        let gridHelper = null;
+        let backgroundTheme = 'dark';
+        let renderQuality = 'overview';
+        let activeViewIndex = -1;
+        let selectionVersion = 0;
 
         init();
         loadData();
@@ -119,7 +156,7 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0e14);
 
-            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.05, 20000);
             camera.position.set(22, 18, 22);
 
             renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -131,11 +168,75 @@
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
 
-            const grid = new THREE.GridHelper(40, 40, 0x283344, 0x161f2c);
-            scene.add(grid);
+            document.getElementById('theme-dark').addEventListener('click', () => setBackgroundTheme('dark'));
+            document.getElementById('theme-light').addEventListener('click', () => setBackgroundTheme('light'));
+            document.getElementById('quality-overview').addEventListener('click', () => setRenderQuality('overview'));
+            document.getElementById('quality-full').addEventListener('click', () => setRenderQuality('full'));
+            let savedTheme = 'dark';
+            let savedQuality = 'overview';
+            try {
+                savedTheme = localStorage.getItem('dronelidar-background') || 'dark';
+                savedQuality = localStorage.getItem('dronelidar-render-quality') || 'overview';
+            } catch (_) { }
+            setBackgroundTheme(savedTheme === 'light' ? 'light' : 'dark');
+            setRenderQuality(savedQuality === 'full' ? 'full' : 'overview', false, false);
 
             window.addEventListener('resize', onWindowResize, false);
             animate();
+        }
+
+        function setBackgroundTheme(theme) {
+            backgroundTheme = theme === 'light' ? 'light' : 'dark';
+            const isLight = backgroundTheme === 'light';
+            const backgroundColor = isLight ? 0xf2f5f8 : 0x0a0e14;
+            scene.background = new THREE.Color(backgroundColor);
+            document.body.style.backgroundColor = isLight ? '#f2f5f8' : '#0a0e14';
+
+            if (gridHelper) {
+                scene.remove(gridHelper);
+                gridHelper.geometry.dispose();
+                if (Array.isArray(gridHelper.material)) {
+                    gridHelper.material.forEach(material => material.dispose());
+                } else {
+                    gridHelper.material.dispose();
+                }
+            }
+            gridHelper = new THREE.GridHelper(
+                40,
+                40,
+                isLight ? 0x66758a : 0x283344,
+                isLight ? 0xc4ccd7 : 0x161f2c);
+            scene.add(gridHelper);
+
+            if (boundaryLine) {
+                boundaryLine.material.color.setHex(isLight ? 0x7b1fa2 : 0xbd93f9);
+            }
+            document.getElementById('theme-dark').classList.toggle('active', !isLight);
+            document.getElementById('theme-light').classList.toggle('active', isLight);
+            document.getElementById('theme-dark').setAttribute('aria-pressed', String(!isLight));
+            document.getElementById('theme-light').setAttribute('aria-pressed', String(isLight));
+            try {
+                localStorage.setItem('dronelidar-background', backgroundTheme);
+            } catch (_) { }
+        }
+
+        function setRenderQuality(quality, reload = true, persist = true) {
+            renderQuality = quality === 'full' ? 'full' : 'overview';
+            const isFull = renderQuality === 'full';
+            document.getElementById('quality-overview').classList.toggle('active', !isFull);
+            document.getElementById('quality-full').classList.toggle('active', isFull);
+            document.getElementById('quality-overview').setAttribute('aria-pressed', String(!isFull));
+            document.getElementById('quality-full').setAttribute('aria-pressed', String(isFull));
+            if (persist) {
+                try {
+                    localStorage.setItem('dronelidar-render-quality', renderQuality);
+                } catch (_) { }
+            }
+
+            if (reload && activeViewIndex >= 0 && viewItems.length > activeViewIndex) {
+                const activeButton = document.querySelectorAll('.epoch-row button')[activeViewIndex];
+                selectView(activeViewIndex, activeButton);
+            }
         }
 
         function safeNum(val) {
@@ -155,18 +256,21 @@
                 if (!metaResponse.ok) throw new Error("meta.json не найден. Запустите расчет в консоли.");
                 const metaJson = await metaResponse.json();
                 epochsData = metaJson.Epochs || [];
+                if (metaJson.RunMode === 'SINGLE_SCAN_PREVIEW') {
+                    setRenderQuality('full', false, false);
+                }
 
                 if (epochsData.length === 0) throw new Error("В meta.json нет эпох.");
 
                 const sceneBadge = document.getElementById('scene-type-badge');
                 if (metaJson.Scene === "Warehouse") {
-                    sceneBadge.innerText = "Склад МТР / Трубная база";
+                    sceneBadge.innerText = "Склад / штабеля";
                     sceneBadge.style.background = "#8957e5";
                 } else if (metaJson.Scene === "Crater") {
-                    sceneBadge.innerText = "Котлован компрессорной станции";
+                    sceneBadge.innerText = "Строительный котлован";
                     sceneBadge.style.background = "#d29922";
                 } else {
-                    sceneBadge.innerText = "Карьер / Породный отвал";
+                    sceneBadge.innerText = "Карьер / выемка";
                     sceneBadge.style.background = "#238636";
                 }
 
@@ -176,57 +280,98 @@
 
                 const btnContainer = document.getElementById('btn-container');
                 btnContainer.innerHTML = '';
-
                 for (let i = 0; i < epochsData.length; i++) {
                     const ep = epochsData[i];
-                    const epochGroup = new THREE.Group();
-                    epochGroup.visible = false;
-                    scene.add(epochGroup);
-                    epochGroups.push(epochGroup);
+                    const row = document.createElement('div');
+                    row.className = 'epoch-row';
+                    const label = document.createElement('div');
+                    label.className = 'epoch-label';
+                    label.innerText = ep.Title || `Скан ${ep.Id ?? i}`;
+                    row.appendChild(label);
 
-                    if (ep.Octree && ep.Octree.Nodes && ep.Octree.Nodes.length > 1) {
-                        const octants = ep.Octree.Nodes.filter(n => n.Level === 1);
-                        for (const node of octants) {
-                            fetch(node.BinFile).then(res => res.arrayBuffer()).then(buf => {
-                                epochGroup.add(createPointCloud(buf));
-                            }).catch(() => {});
+                    const views = Array.isArray(ep.Views) && ep.Views.length
+                        ? ep.Views
+                        : [{ Kind: 'CLEAN', Title: ep.Title, BinFile: ep.BinFile, Octree: ep.Octree }];
+
+                    for (const view of views) {
+                        const viewIndex = viewItems.length;
+                        const group = new THREE.Group();
+                        group.visible = false;
+                        scene.add(group);
+                        viewGroups.push(group);
+
+                        const octree = view.Octree;
+                        const extent = octree && octree.GlobalMin && octree.GlobalMax
+                            ? maxExtent(octree.GlobalMin, octree.GlobalMax)
+                            : 30;
+                        const nodes = octree && Array.isArray(octree.Nodes)
+                            ? octree.Nodes.filter(n => n.Level === 1)
+                            : [];
+                        const files = nodes.length
+                            ? nodes.map(node => node.BinFile)
+                            : (view.BinFile ? [view.BinFile] : []);
+                        viewItems.push({
+                            epoch: ep,
+                            view,
+                            group,
+                            extent,
+                            overviewFiles: files,
+                            fullFile: view.BinFile || null,
+                            loaded: false,
+                            loadedQuality: null,
+                            renderedPoints: 0,
+                            loadPromise: null,
+                            loadGeneration: 0
+                        });
+
+                        if (i === 0 && view.Kind === 'CLEAN' && octree) {
+                            fitCamera(octree.GlobalMin, octree.GlobalMax);
                         }
-                    } else {
-                        fetch(ep.BinFile).then(res => res.arrayBuffer()).then(buf => {
-                            epochGroup.add(createPointCloud(buf));
-                        }).catch(() => {});
+
+                        const btn = document.createElement('button');
+                        const isRaw = view.Kind === 'RAW';
+                        btn.className = isRaw ? 'raw' : 'clean';
+                        btn.innerHTML = `<span>${isRaw ? 'До фильтрации' : 'После фильтрации'}</span>`
+                            + `<span class="btn-badge">${isRaw ? 'RAW' : 'CLEAN'}</span>`;
+                        btn.onclick = () => selectView(viewIndex, btn);
+                        row.appendChild(btn);
                     }
-
-                    const btn = document.createElement('button');
-                    const titleSpan = document.createElement('span');
-                    titleSpan.innerText = ep.Title || `Скан ${ep.Id ?? i}`;
-
-                    const badgeSpan = document.createElement('span');
-                    badgeSpan.className = 'btn-badge';
-                    if (ep.StageType === 'RAW_SCAN') {
-                        badgeSpan.innerText = "ТЕХНИКА В ЗОНЕ";
-                    } else if (ep.StageType === 'CLEANED_BASE' || i === 1) {
-                        badgeSpan.innerText = "БАЗИС";
-                    } else {
-                        badgeSpan.innerText = `${formatM3(safeNum(ep.CutVolume), true)} м³`;
-                    }
-
-                    btn.appendChild(titleSpan);
-                    btn.appendChild(badgeSpan);
-                    btn.onclick = () => selectEpoch(i, btn);
-                    btnContainer.appendChild(btn);
+                    btnContainer.appendChild(row);
                 }
 
-                const targetIdx = (epochGroups.length > 1) ? 1 : 0;
-                selectEpoch(targetIdx, btnContainer.children[targetIdx]);
-
-                document.getElementById('loading').style.display = 'none';
+                const firstClean = viewItems.findIndex(item => item.view.Kind === 'CLEAN');
+                const targetIdx = firstClean >= 0 ? firstClean : 0;
+                const targetButton = document.querySelectorAll('.epoch-row button')[targetIdx];
                 document.getElementById('dashboard').style.display = 'block';
+                await selectView(targetIdx, targetButton);
 
             } catch (error) {
                 document.getElementById('loading').innerText = "Ошибка: " + error.message;
                 document.getElementById('loading').style.borderColor = "#f85149";
             }
+        }
+
+        async function loadBinary(fileName) {
+            const response = await fetch(fileName);
+            if (!response.ok) throw new Error(`Не загружен ${fileName}`);
+            return response.arrayBuffer();
+        }
+
+        function maxExtent(min, max) {
+            return Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2], 1);
+        }
+
+        function fitCamera(min, max) {
+            const cx = (min[0] + max[0]) / 2;
+            const cy = (min[2] + max[2]) / 2;
+            const cz = (min[1] + max[1]) / 2;
+            const size = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2], 12);
+            camera.near = Math.max(0.05, size / 2000);
+            camera.far = Math.max(2000, size * 40);
+            camera.position.set(cx + size * 0.9, cz + size * 0.75, cy + size * 0.9);
+            camera.updateProjectionMatrix();
+            controls.target.set(cx, cz, cy);
+            controls.update();
         }
 
         function renderBoundary(vertices) {
@@ -238,35 +383,124 @@
             points.push(new THREE.Vector3(vertices[0].X, 0.3, vertices[0].Y));
 
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({ color: 0xbd93f9, linewidth: 2 });
+            const material = new THREE.LineBasicMaterial({
+                color: backgroundTheme === 'light' ? 0x7b1fa2 : 0xbd93f9,
+                linewidth: 2
+            });
             boundaryLine = new THREE.Line(geometry, material);
             scene.add(boundaryLine);
         }
 
-        function selectEpoch(index, btnElement) {
-            for (let i = 0; i < epochGroups.length; i++) {
-                epochGroups[i].visible = (i === index);
+        async function ensureViewLoaded(index) {
+            const item = viewItems[index];
+            if (!item) return;
+            if (item.loaded && item.loadedQuality === renderQuality) return;
+
+            disposeViewItem(item);
+            const files = renderQuality === 'full'
+                ? (item.fullFile ? [item.fullFile] : [])
+                : item.overviewFiles;
+            if (!files.length) throw new Error("Для выбранного слота отсутствуют BIN-файлы.");
+
+            if (!item.loadPromise) {
+                const generation = ++item.loadGeneration;
+                item.loadPromise = Promise.all(files.map(loadBinary))
+                    .then(buffers => {
+                        if (generation !== item.loadGeneration) return;
+                        let renderedPoints = 0;
+                        for (const buffer of buffers) {
+                            const cloud = createPointCloud(buffer, item.extent);
+                            renderedPoints += cloud.userData.pointCount;
+                            item.group.add(cloud);
+                        }
+                        item.loaded = true;
+                        item.loadedQuality = renderQuality;
+                        item.renderedPoints = renderedPoints;
+                    });
+            }
+            await item.loadPromise;
+        }
+
+        function disposeViewItem(item) {
+            item.loadGeneration++;
+            item.loadPromise = null;
+            item.loaded = false;
+            item.loadedQuality = null;
+            item.renderedPoints = 0;
+            while (item.group.children.length > 0) {
+                const child = item.group.children[0];
+                item.group.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(material => material.dispose());
+                } else if (child.material) {
+                    child.material.dispose();
+                }
+            }
+        }
+
+        async function selectView(index, btnElement) {
+            const version = ++selectionVersion;
+            const item = viewItems[index] || {};
+            const ep = item.epoch || {};
+            const loading = document.getElementById('loading');
+            if (renderQuality === 'full') {
+                for (let i = 0; i < viewItems.length; i++) {
+                    if (i !== index && viewItems[i].loaded)
+                        disposeViewItem(viewItems[i]);
+                }
+            }
+            loading.innerText = `Загрузка: ${ep.Title || 'скан'} · ${item.view?.Kind || ''}`;
+            loading.style.borderColor = "#58a6ff";
+            loading.style.display = 'block';
+
+            try {
+                await ensureViewLoaded(index);
+            } catch (error) {
+                loading.innerText = "Ошибка: " + error.message;
+                loading.style.borderColor = "#f85149";
+                return;
+            }
+            if (version !== selectionVersion) return;
+            activeViewIndex = index;
+
+            for (let i = 0; i < viewGroups.length; i++) {
+                viewGroups[i].visible = (i === index);
             }
 
-            const buttons = document.getElementById('btn-container').children;
+            const buttons = document.querySelectorAll('.epoch-row button');
             for (let i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
             if (btnElement) btnElement.classList.add('active');
 
-            const ep = epochsData[index] || {};
             const cutVal = safeNum(ep.CutVolume);
             const fillVal = safeNum(ep.FillVolume);
             const massVal = safeNum(ep.WeightTon);
             const areaVal = safeNum(ep.AreaCut);
-            const rmseVal = safeNum(ep.Rmse);
+            const rmseVal = ep.RmsStableZone;
+            const removed = safeNum(ep.MachineryRemoved) + safeNum(ep.VegetationRemoved);
 
             document.getElementById('val-cut').innerHTML = `${formatM3(cutVal, true)} <span>м³</span>`;
-            document.getElementById('val-fill').innerHTML = `-${formatM3(fillVal)} <span>м³</span>`;
+            document.getElementById('val-fill').innerHTML = `${formatM3(fillVal, true)} <span>м³</span>`;
             document.getElementById('val-mass').innerHTML = `${massVal.toLocaleString('ru-RU', { minimumFractionDigits: 1 })} <span>т</span>`;
             document.getElementById('val-area').innerText = areaVal.toLocaleString('ru-RU', { minimumFractionDigits: 1 });
-            document.getElementById('val-rmse').innerText = `±${rmseVal.toFixed(3)}`;
+            document.getElementById('val-rmse').innerText = rmseVal !== null
+                && rmseVal !== undefined
+                && Number.isFinite(Number(rmseVal))
+                ? `${Number(rmseVal).toFixed(3)} м`
+                : 'не оценено';
+            document.getElementById('val-coverage').innerText = safeNum(ep.CoveragePercent).toFixed(1);
+            document.getElementById('val-removed').innerText = Math.round(removed).toLocaleString('ru-RU');
+            const totalPoints = Math.max(0, Math.round(safeNum(item.view?.PointCount)));
+            const renderedPoints = Math.max(0, item.renderedPoints);
+            const renderedPercent = totalPoints > 0 ? renderedPoints * 100 / totalPoints : 0;
+            document.getElementById('val-rendered').innerText =
+                `${renderedPoints.toLocaleString('ru-RU')} / ${totalPoints.toLocaleString('ru-RU')}`;
+            document.getElementById('val-render-percent').innerText =
+                `${renderedPercent.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+            loading.style.display = 'none';
         }
 
-        function createPointCloud(buffer) {
+        function createPointCloud(buffer, extent) {
             const POINT_STRIDE = 16;
             const numPoints = Math.floor(buffer.byteLength / POINT_STRIDE);
 
@@ -298,7 +532,14 @@
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-            return new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.035, vertexColors: true }));
+            const pointSize = Math.max(0.018, Math.min(0.09, extent / 850));
+            const cloud = new THREE.Points(geometry, new THREE.PointsMaterial({
+                size: pointSize,
+                sizeAttenuation: true,
+                vertexColors: true
+            }));
+            cloud.userData.pointCount = numPoints;
+            return cloud;
         }
 
         function onWindowResize() {
