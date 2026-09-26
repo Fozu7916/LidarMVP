@@ -8,7 +8,7 @@
     <AssemblyName>DroneLiDAR</AssemblyName>
     <RootNamespace>LidarRunner</RootNamespace>
     <Product>DroneLiDAR</Product>
-    <Description>Экспресс-аудит земляных масс по данным БПЛА-LiDAR</Description>
+    <Description>Экспресс-аудит объёма выпаботки по данным БПЛА-LiDAR</Description>
     <DefaultItemExcludes>$(DefaultItemExcludes);.verify\**</DefaultItemExcludes>
   </PropertyGroup>
  <ItemGroup>

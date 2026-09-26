@@ -12,9 +12,9 @@ using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("DroneLiDAR")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
-[assembly: System.Reflection.AssemblyDescriptionAttribute("Экспресс-аудит земляных масс по данным БПЛА-LiDAR")]
+[assembly: System.Reflection.AssemblyDescriptionAttribute("Экспресс-аудит объёма выпаботки по данным БПЛА-LiDAR")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e02cae917ed316452527f4e982ebd91e87c6d5f8")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1fa1bcf146be5bc09c75fb9c6b64653418809ebe")]
 [assembly: System.Reflection.AssemblyProductAttribute("DroneLiDAR")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DroneLiDAR")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
