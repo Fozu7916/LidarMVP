@@ -8,34 +8,36 @@
     <AssemblyName>DroneLiDAR</AssemblyName>
     <RootNamespace>LidarRunner</RootNamespace>
     <Product>DroneLiDAR</Product>
-    <Description>Экспресс-аудит объёма выпаботки по данным БПЛА-LiDAR</Description>
+    <Description>Экспресс-аудит объёма выработки по данным БПЛА-LiDAR</Description>
+    <!-- Версия по умолчанию; в CI перекрывается тегом через -p:Version=... -->
+    <Version>0.0.0-dev</Version>
     <DefaultItemExcludes>$(DefaultItemExcludes);.verify\**</DefaultItemExcludes>
   </PropertyGroup>
- <ItemGroup>
-  <None Update="viewer.html">
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  </None>
-  <None Update="web\**\*">
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  </None>
-  <None Update="THIRD-PARTY-NOTICES.txt">
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-  </None>
-  
-</ItemGroup>
- <ItemGroup>
-   <PackageReference Include="Altemiq.IO.Las.Compression" Version="1.5.0" />
-   <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
- </ItemGroup>
 
-<!-- Автоматическая сборка релиза и архивация средствами MSBuild -->
+  <ItemGroup>
+    <None Update="viewer.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="web\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="THIRD-PARTY-NOTICES.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Altemiq.IO.Las.Compression" Version="1.5.0" />
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+  </ItemGroup>
+
+  <!-- Автоматическая сборка релиза и архивация средствами MSBuild -->
   <Target Name="PublishAndZip" AfterTargets="Publish">
     <PropertyGroup>
-      <PublishDir>$(PublishDir)</PublishDir>
-      <ZipFileName>$(ProjectDir)bin\Release\$(TargetFramework)\win-x64\DroneLiDAR_Release.zip</ZipFileName>
+      <ZipFileName>$(ProjectDir)bin\Release\$(TargetFramework)\$(RuntimeIdentifier)\DroneLiDAR_Release.zip</ZipFileName>
     </PropertyGroup>
 
-    <!-- Копируем viewer.html в папку публикации, чтобы он попал в архив -->
+    <!-- Копируем viewer.html и лицензии в папку публикации, чтобы они попали в архив -->
     <Copy SourceFiles="$(ProjectDir)viewer.html" DestinationFolder="$(PublishDir)" Condition="Exists('$(ProjectDir)viewer.html')" />
     <Copy SourceFiles="$(ProjectDir)THIRD-PARTY-NOTICES.txt" DestinationFolder="$(PublishDir)" Condition="Exists('$(ProjectDir)THIRD-PARTY-NOTICES.txt')" />
     <ItemGroup>
